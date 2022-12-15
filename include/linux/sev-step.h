@@ -5,6 +5,7 @@
 #include <linux/spinlock_types.h>
 #include <asm/atomic.h>
 #include <linux/kvm_types.h>
+#include <asm/kvm_page_track.h>
 
 //
 //	SEV STEP

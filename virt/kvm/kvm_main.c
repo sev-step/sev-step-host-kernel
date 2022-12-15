@@ -4654,7 +4654,7 @@ static int kvm_dev_ioctl_create_vm(unsigned long type)
 
 	printk("setting main_vm to newly started vm\n");
 	main_vm = kvm;
-	
+
 	return r;
 
 put_kvm:
@@ -4666,6 +4666,8 @@ static long kvm_dev_ioctl(struct file *filp,
 			  unsigned int ioctl, unsigned long arg)
 {
 	long r = -EINVAL;
+
+	void __user *argp = (void __user *)arg;
 
 	switch (ioctl) {
 	case KVM_GET_API_VERSION:
