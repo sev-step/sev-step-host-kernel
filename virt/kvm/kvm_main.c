@@ -4822,13 +4822,6 @@ static long kvm_dev_ioctl(struct file *filp,
 				return -EINVAL;
 			}
 
-			// //test interatction with shared memory
-			// printk("trying to touch shared mem\n");
-			// ctx->shared_mem_region->have_event = 0;
-			// printk("success! Trying to lock and unlock. Current lock value is %d\n",ctx->shared_mem_region->spinlock);
-			// raw_spinlock_lock(&ctx->shared_mem_region->spinlock);
-			// raw_spinlock_unlock(&ctx->shared_mem_region->spinlock);
-
 			printk("KVM_USP_INIT_POLL_API: success\n");
 			r = 0;
 	} break;

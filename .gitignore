@@ -161,3 +161,6 @@ x509.genkey
 
 # Documentation toolchain
 sphinx_*/
+
+# Build files
+System.map-5.6.0-sev-es

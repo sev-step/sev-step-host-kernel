@@ -1226,7 +1226,8 @@ static void drop_large_spte(struct kvm_vcpu *vcpu, u64 *sptep)
 }
 
 /*
- * Write-protect on the specified @sptep, @pt_protect indicates whether
+ * Apply the protection mode specified in @mode to the specified @sptep,
+ * @pt_protect indicates whether
  * spte write-protection is caused by protecting shadow page table.
  *
  * Note: write protection is difference between dirty logging and spte
@@ -1238,9 +1239,12 @@ static void drop_large_spte(struct kvm_vcpu *vcpu, u64 *sptep)
  *
  * Return true if tlb need be flushed.
  */
-static bool spte_write_protect(u64 *sptep, bool pt_protect)
+static bool spte_protect(u64 *sptep, bool pt_protect,
+	enum kvm_page_track_mode mode)
 {
 	u64 spte = *sptep;
+	bool shouldFlush = false;
+
 
 	if (!is_writable_pte(spte) &&
 	      !(pt_protect && spte_can_locklessly_be_made_writable(spte)))
@@ -1249,22 +1253,46 @@ static bool spte_write_protect(u64 *sptep, bool pt_protect)
 	rmap_printk("spte %p %llx\n", sptep, *sptep);
 
 	if (pt_protect)
-		spte &= ~shadow_mmu_writable_mask;
-	spte = spte & ~PT_WRITABLE_MASK;
+		spte &= ~EPT_SPTE_MMU_WRITABLE;
 
-	return mmu_spte_update(sptep, spte);
+	if(mode == KVM_PAGE_TRACK_WRITE) {
+		spte = spte & ~PT_WRITABLE_MASK;
+		shouldFlush = true;
+
+	} else if( mode == KVM_PAGE_TRACK_RESET_ACCESSED) {
+		spte = spte & ~PT_ACCESSED_MASK;
+	} else if(mode == KVM_PAGE_TRACK_ACCESS) {
+		spte = spte & ~PT_PRESENT_MASK;
+		spte = spte & ~PT_WRITABLE_MASK;
+		spte = spte & ~PT_USER_MASK;
+		spte = spte | (0x1ULL << PT64_NX_SHIFT);
+		shouldFlush = true;
+	} else if( mode == KVM_PAGE_TRACK_EXEC) {
+		spte = spte | (0x1ULL << PT64_NX_SHIFT); //nx bit is set, to prevent execution, not removed
+		shouldFlush = true;
+	} else if (mode == KVM_PAGE_TRACK_RESET_EXEC) {
+		spte = spte & (~(0x1ULL << PT64_NX_SHIFT));
+		shouldFlush = true;
+	}else {
+		printk(KERN_WARNING "spte_protect was called with invalid mode"
+		"parameter %d\n",mode);
+	}
+
+	shouldFlush |= mmu_spte_update(sptep, spte);
+	return shouldFlush;
 }
 
-static bool __rmap_write_protect(struct kvm *kvm,
+
+static bool __rmap_protect(struct kvm *kvm,
 				 struct kvm_rmap_head *rmap_head,
-				 bool pt_protect)
+				 bool pt_protect, enum kvm_page_track_mode mode)
 {
 	u64 *sptep;
 	struct rmap_iterator iter;
 	bool flush = false;
 
 	for_each_rmap_spte(rmap_head, &iter, sptep)
-		flush |= spte_write_protect(sptep, pt_protect);
+		flush |= spte_protect(sptep, pt_protect, mode);
 
 	return flush;
 }
@@ -1335,9 +1363,9 @@ static void kvm_mmu_write_protect_pt_masked(struct kvm *kvm,
 		return;
 
 	while (mask) {
-		rmap_head = gfn_to_rmap(slot->base_gfn + gfn_offset + __ffs(mask),
-					PG_LEVEL_4K, slot);
-		__rmap_write_protect(kvm, rmap_head, false);
+		rmap_head = __gfn_to_rmap(slot->base_gfn + gfn_offset + __ffs(mask),
+					  PT_PAGE_TABLE_LEVEL, slot);
+		__rmap_protect(kvm, rmap_head, false, KVM_PAGE_TRACK_WRITE);
 
 		/* clear the first set bit */
 		mask &= mask - 1;
@@ -1404,13 +1432,13 @@ void kvm_arch_mmu_enable_log_dirty_pt_masked(struct kvm *kvm,
 		gfn_t start = slot->base_gfn + gfn_offset + __ffs(mask);
 		gfn_t end = slot->base_gfn + gfn_offset + __fls(mask);
 
-		kvm_mmu_slot_gfn_write_protect(kvm, slot, start, PG_LEVEL_2M);
+		kvm_mmu_slot_gfn_protect(kvm, slot, start, PG_LEVEL_2M,KVM_PAGE_TRACK_WRITE);
 
 		/* Cross two large pages? */
 		if (ALIGN(start << PAGE_SHIFT, PMD_SIZE) !=
 		    ALIGN(end << PAGE_SHIFT, PMD_SIZE))
-			kvm_mmu_slot_gfn_write_protect(kvm, slot, end,
-						       PG_LEVEL_2M);
+			kvm_mmu_slot_gfn_protect(kvm, slot, end,
+						       PG_LEVEL_2M,KVM_PAGE_TRACK_WRITE);
 	}
 
 	/* Now handle 4K PTEs.  */
@@ -1425,34 +1453,38 @@ int kvm_cpu_dirty_log_size(void)
 	return kvm_x86_ops.cpu_dirty_log_size;
 }
 
-bool kvm_mmu_slot_gfn_write_protect(struct kvm *kvm,
+bool kvm_mmu_slot_gfn_protect(struct kvm *kvm,
 				    struct kvm_memory_slot *slot, u64 gfn,
-				    int min_level)
+				    int min_level,
+					enum kvm_page_track_mode mode)
 {
 	struct kvm_rmap_head *rmap_head;
 	int i;
-	bool write_protected = false;
+	bool protected = false;
 
 	if (kvm_memslots_have_rmaps(kvm)) {
 		for (i = min_level; i <= KVM_MAX_HUGEPAGE_LEVEL; ++i) {
 			rmap_head = gfn_to_rmap(gfn, i, slot);
-			write_protected |= __rmap_write_protect(kvm, rmap_head, true);
+			protected |= __rmap_protect(kvm, rmap_head, true, mode);
 		}
 	}
 
+	//luca: this was not in sev-es kernel. Not sure what it does
+
 	if (is_tdp_mmu_enabled(kvm))
-		write_protected |=
+		protected |=
 			kvm_tdp_mmu_write_protect_gfn(kvm, slot, gfn, min_level);
 
-	return write_protected;
+	return protected;
 }
 
-static bool rmap_write_protect(struct kvm_vcpu *vcpu, u64 gfn)
+static bool rmap_protect(struct kvm_vcpu *vcpu, u64 gfn,
+	enum kvm_page_track_mode mode)
 {
 	struct kvm_memory_slot *slot;
 
 	slot = kvm_vcpu_gfn_to_memslot(vcpu, gfn);
-	return kvm_mmu_slot_gfn_write_protect(vcpu->kvm, slot, gfn, PG_LEVEL_4K);
+	return kvm_mmu_slot_gfn_protect(vcpu->kvm, slot, gfn,PG_LEVEL_4K,KVM_PAGE_TRACK_WRITE);
 }
 
 static bool kvm_zap_rmapp(struct kvm *kvm, struct kvm_rmap_head *rmap_head,
@@ -2051,7 +2083,7 @@ static void mmu_sync_children(struct kvm_vcpu *vcpu,
 		bool protected = false;
 
 		for_each_sp(pages, sp, parents, i)
-			protected |= rmap_write_protect(vcpu, sp->gfn);
+			protected |= rmap_protect(vcpu, sp->gfn, KVM_PAGE_TRACK_WRITE);
 
 		if (protected) {
 			kvm_flush_remote_tlbs(vcpu->kvm);
@@ -2175,7 +2207,8 @@ trace_get_page:
 	hlist_add_head(&sp->hash_link, sp_list);
 	if (!direct) {
 		account_shadowed(vcpu->kvm, sp);
-		if (level == PG_LEVEL_4K && rmap_write_protect(vcpu, gfn))
+		if (level ==  PG_LEVEL_4K &&
+		      rmap_protect(vcpu, gfn, KVM_PAGE_TRACK_WRITE))
 			kvm_flush_remote_tlbs_with_address(vcpu->kvm, gfn, 1);
 	}
 	trace_kvm_mmu_get_page(sp, true);
@@ -5853,7 +5886,7 @@ static bool slot_rmap_write_protect(struct kvm *kvm,
 				    struct kvm_rmap_head *rmap_head,
 				    const struct kvm_memory_slot *slot)
 {
-	return __rmap_write_protect(kvm, rmap_head, false);
+	return __rmap_protect(kvm, rmap_head, false, KVM_PAGE_TRACK_WRITE);
 }
 
 void kvm_mmu_slot_remove_write_access(struct kvm *kvm,
