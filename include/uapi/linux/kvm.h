@@ -14,6 +14,11 @@
 #include <linux/ioctl.h>
 #include <asm/kvm.h>
 
+//
+// SEV STEP
+//
+#include <linux/sev-step.h>
+
 #define KVM_API_VERSION 12
 
 /* *** Deprecated interfaces *** */
@@ -2062,5 +2067,25 @@ struct kvm_stats_desc {
 };
 
 #define KVM_GET_STATS_FD  _IO(KVMIO,  0xce)
+
+//
+// SEV-STEP-SNP Types
+//
+typedef struct {
+	uint64_t gpa;
+	int track_mode;
+} track_page_param_t;
+
+typedef struct {
+	int track_mode;
+} track_all_pages_t;
+
+//
+// SEV-STEP-SNP IOCTLs
+//
+#define KVM_TRACK_PAGE _IOWR(KVMIO, 0xb, track_page_param_t)
+#define KVM_TRACK_ALL_PAGES _IOWR(KVMIO, 0xc, track_all_pages_t)
+#define KVM_UNTRACK_ALL_PAGES _IOWR(KVMIO, 0xd, track_all_pages_t)
+#define KVM_UNTRACK_PAGE _IOWR(KVMIO, 0xe, track_page_param_t)
 
 #endif /* __LINUX_KVM_H */

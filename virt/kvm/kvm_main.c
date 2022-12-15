@@ -67,6 +67,11 @@
 
 #include <linux/kvm_dirty_ring.h>
 
+//
+//	SEV STEP
+//
+#include <linux/sev-step.h>
+
 /* Worst case buffer size needed for holding an integer. */
 #define ITOA_MAX_LEN 12
 
@@ -154,6 +159,12 @@ EXPORT_SYMBOL_GPL(kvm_rebooting);
 static void kvm_uevent_notify_change(unsigned int type, struct kvm *kvm);
 static unsigned long long kvm_createvm_count;
 static unsigned long long kvm_active_vms;
+
+//
+//	SEV STEP
+//
+struct kvm* main_vm;
+EXPORT_SYMBOL(main_vm);
 
 __weak void kvm_arch_mmu_notifier_invalidate_range(struct kvm *kvm,
 						   unsigned long start, unsigned long end)
@@ -1182,6 +1193,11 @@ static void kvm_destroy_vm(struct kvm *kvm)
 	preempt_notifier_dec();
 	hardware_disable_all();
 	mmdrop(mm);
+
+	if( main_vm == kvm ) {
+		printk("Detected shutdown of tracked VM\n");
+		main_vm = NULL;
+	}
 }
 
 void kvm_get_kvm(struct kvm *kvm)
@@ -4635,6 +4651,10 @@ static int kvm_dev_ioctl_create_vm(unsigned long type)
 	kvm_uevent_notify_change(KVM_EVENT_CREATE_VM, kvm);
 
 	fd_install(r, file);
+
+	printk("setting main_vm to newly started vm\n");
+	main_vm = kvm;
+	
 	return r;
 
 put_kvm:
@@ -4675,6 +4695,105 @@ static long kvm_dev_ioctl(struct file *filp,
 	case KVM_TRACE_DISABLE:
 		r = -EOPNOTSUPP;
 		break;
+	case KVM_TRACK_PAGE: {
+		track_page_param_t param;
+		printk("KVM_TRACK_PAGE: got called\n");
+
+		if (copy_from_user(&param, argp, sizeof(param))) {
+			printk("KVM_TRACK_PAGE: failed to copy args\n");
+			return -EINVAL;
+		}
+
+		if (param.track_mode < 0 ||
+		    param.track_mode >= KVM_PAGE_TRACK_MAX) {
+			printk("KVM_TRACK_PAGE: track_mode %d invalid, must be in range [%d,%d]",
+			       param.track_mode, 0, KVM_PAGE_TRACK_MAX);
+			return -EFAULT;
+		}
+		//printk("KVM_TRACK_PAGE: issueing exec track to 0x%llx!\n",param.gpa);
+		if (!__track_single_page(main_vm->vcpus[0],
+					 param.gpa >> PAGE_SHIFT,
+					 param.track_mode)) {
+			printk("KVM_TRACK_PAGE: __track_single_page failed");
+		}
+		printk("KVM_TRACK_PAGE successfull!\n");
+	} break;
+	case KVM_UNTRACK_PAGE: {
+		track_page_param_t param;
+		printk("KVM_UNTRACK_PAGE: got called\n");
+
+		if (copy_from_user(&param, argp, sizeof(param))) {
+			printk("KVM_UNTRACK_PAGE: failed to copy args\n");
+			return -EINVAL;
+		}
+
+		if (param.track_mode < 0 ||
+		    param.track_mode >= KVM_PAGE_TRACK_MAX) {
+			printk("KVM_UNTRACK_PAGE: track_mode %d invalid, must be in range [%d,%d]",
+			       param.track_mode, 0, KVM_PAGE_TRACK_MAX);
+			return -EFAULT;
+		}
+		//printk("KVM_TRACK_PAGE: issueing exec track to 0x%llx!\n",param.gpa);
+		if (!__untrack_single_page(main_vm->vcpus[0],
+					   param.gpa >> PAGE_SHIFT,
+					   param.track_mode)) {
+			printk("KVM_UNTRACK_PAGE: __track_single_page failed");
+		}
+		printk("KVM_UNTRACK_PAGE successfull!\n");
+	} break;
+	case KVM_TRACK_ALL_PAGES: {
+		track_all_pages_t param;
+		long tracked_pages;
+		printk("KVM_TRACK_ALL_PAGES: got called\n");
+		if (copy_from_user(&param, argp, sizeof(param))) {
+			printk("KVM_TRACK_ALL_PAGES: failed to copy args\n");
+			return -EINVAL;
+		}
+
+		if (main_vm == NULL) {
+			printk("KVM_TRACK_ALL_PAGES: main_vm is not initialized, aborting!\n");
+			return -EFAULT;
+		}
+
+		if (param.track_mode < 0 ||
+		    param.track_mode >= KVM_PAGE_TRACK_MAX) {
+			printk("KVM_TRACK_ALL_PAGES: track_mode %d invalid, must be in range [%d,%d]",
+			       param.track_mode, 0, KVM_PAGE_TRACK_MAX);
+			return -EFAULT;
+		}
+		//printk("KVM_TRACK_ALL_PAGES: with mode %d\n",param.track_mode);
+		tracked_pages =
+			kvm_start_tracking(main_vm->vcpus[0], param.track_mode);
+		//printk("KVM_TRACK_ALL_PAGES: tracked %ld pages in total\n",tracked_pages);
+		r = 0;
+	} break;
+	case KVM_UNTRACK_ALL_PAGES: {
+		track_all_pages_t param;
+		long untrack_count;
+		if (copy_from_user(&param, argp, sizeof(param))) {
+			printk("UNTRACK_ALL_PAGES: failed to copy args\n");
+			return -EINVAL;
+		}
+
+		if (main_vm == NULL) {
+			printk("UNTRACK_ALL_PAGES: main_vm is not initialized, aborting!\n");
+			return -EFAULT;
+		}
+
+		if (param.track_mode < 0 ||
+		    param.track_mode >= KVM_PAGE_TRACK_MAX) {
+			printk("UNTRACK_ALL_PAGES: track_mode %d invalid, must be in range [%d,%d]",
+			       param.track_mode, 0, KVM_PAGE_TRACK_MAX);
+			return -EFAULT;
+		}
+
+		//printk("KVM_USPT_UNTRACK_ALL: with mode %d\n",param.track_mode);
+		//untrack_count = untrack_all_pages(param.track_mode);
+		untrack_count =
+			kvm_stop_tracking(main_vm->vcpus[0], param.track_mode);
+		//printk("KVM_USPT_UNTRACK_ALL: untracked %ld pages\n",untrack_count);
+		r = 0;
+	} break;
 	default:
 		return kvm_arch_dev_ioctl(filp, ioctl, arg);
 	}
