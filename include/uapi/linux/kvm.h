@@ -18,6 +18,7 @@
 // SEV STEP
 //
 #include <linux/sev-step.h>
+#include <linux/userspace_page_track_api.h>
 
 #define KVM_API_VERSION 12
 
@@ -2069,23 +2070,13 @@ struct kvm_stats_desc {
 #define KVM_GET_STATS_FD  _IO(KVMIO,  0xce)
 
 //
-// SEV-STEP-SNP Types
-//
-typedef struct {
-	uint64_t gpa;
-	int track_mode;
-} track_page_param_t;
-
-typedef struct {
-	int track_mode;
-} track_all_pages_t;
-
-//
-// SEV-STEP-SNP IOCTLs
+// SEV-STEP IOCTLs
 //
 #define KVM_TRACK_PAGE _IOWR(KVMIO, 0xb, track_page_param_t)
 #define KVM_TRACK_ALL_PAGES _IOWR(KVMIO, 0xc, track_all_pages_t)
 #define KVM_UNTRACK_ALL_PAGES _IOWR(KVMIO, 0xd, track_all_pages_t)
 #define KVM_UNTRACK_PAGE _IOWR(KVMIO, 0xe, track_page_param_t)
+#define KVM_USP_INIT_POLL_API _IOWR(KVMIO, 0xf, usp_init_poll_api_t)
+#define KVM_USP_CLOSE_POLL_API _IO(KVMIO, 0x10)
 
 #endif /* __LINUX_KVM_H */

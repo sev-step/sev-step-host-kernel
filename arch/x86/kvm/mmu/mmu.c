@@ -56,6 +56,9 @@
 
 #include "paging.h"
 
+// SEV-STEP
+#include <linux/userspace_page_track_api.h>
+
 extern bool itlb_multihit_kvm_mitigation;
 
 int __read_mostly nx_huge_pages = -1;
@@ -3858,6 +3861,23 @@ static int handle_mmio_page_fault(struct kvm_vcpu *vcpu, u64 addr, bool direct)
 static bool page_fault_handle_page_track(struct kvm_vcpu *vcpu,
 					 u32 error_code, gfn_t gfn)
 {
+	/* Send page fault event to userspace */
+
+	//check if page is tracked and if ctx is initialized
+	//otherwise no page fault event is sent to userspace
+	if(kvm_page_track_is_active(vcpu, gfn, KVM_PAGE_TRACK_WRITE) && ctx_initialized()) {
+		usp_page_fault_event_t pf_event = {
+			//.id = ,
+			.faulted_gpa = (uint64_t)(gfn << PAGE_SHIFT)
+		};
+
+		__untrack_single_page(vcpu, gfn, KVM_PAGE_TRACK_WRITE);
+		if(usp_send_and_block(ctx, PAGE_FAULT_EVENT, (void *)&pf_event) == 1) {
+			printk("usp_send_and_block: Failed in page fault handler\n");
+		}
+	}
+	
+
 	if (unlikely(error_code & PFERR_RSVD_MASK))
 		return false;
 

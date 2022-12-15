@@ -65,12 +65,17 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/kvm.h>
 
+
 #include <linux/kvm_dirty_ring.h>
 
 //
 //	SEV STEP
 //
 #include <linux/sev-step.h>
+
+// Own spinlock implementation
+#include <linux/raw_spinlock.h>
+
 
 /* Worst case buffer size needed for holding an integer. */
 #define ITOA_MAX_LEN 12
@@ -4712,11 +4717,12 @@ static long kvm_dev_ioctl(struct file *filp,
 			       param.track_mode, 0, KVM_PAGE_TRACK_MAX);
 			return -EFAULT;
 		}
-		//printk("KVM_TRACK_PAGE: issueing exec track to 0x%llx!\n",param.gpa);
+
 		if (!__track_single_page(main_vm->vcpus[0],
 					 param.gpa >> PAGE_SHIFT,
 					 param.track_mode)) {
 			printk("KVM_TRACK_PAGE: __track_single_page failed");
+			return -EFAULT;
 		}
 		printk("KVM_TRACK_PAGE successfull!\n");
 		r = 0;
@@ -4736,11 +4742,12 @@ static long kvm_dev_ioctl(struct file *filp,
 			       param.track_mode, 0, KVM_PAGE_TRACK_MAX);
 			return -EFAULT;
 		}
-		//printk("KVM_TRACK_PAGE: issueing exec track to 0x%llx!\n",param.gpa);
+
 		if (!__untrack_single_page(main_vm->vcpus[0],
 					   param.gpa >> PAGE_SHIFT,
 					   param.track_mode)) {
 			printk("KVM_UNTRACK_PAGE: __track_single_page failed");
+			return -EFAULT;
 		}
 		printk("KVM_UNTRACK_PAGE successfull!\n");
 		r = 0;
@@ -4765,10 +4772,9 @@ static long kvm_dev_ioctl(struct file *filp,
 			       param.track_mode, 0, KVM_PAGE_TRACK_MAX);
 			return -EFAULT;
 		}
-		//printk("KVM_TRACK_ALL_PAGES: with mode %d\n",param.track_mode);
+
 		tracked_pages =
 			kvm_start_tracking(main_vm->vcpus[0], param.track_mode);
-		//printk("KVM_TRACK_ALL_PAGES: tracked %ld pages in total\n",tracked_pages);
 		r = 0;
 	} break;
 	case KVM_UNTRACK_ALL_PAGES: {
@@ -4791,12 +4797,56 @@ static long kvm_dev_ioctl(struct file *filp,
 			return -EFAULT;
 		}
 
-		//printk("KVM_USPT_UNTRACK_ALL: with mode %d\n",param.track_mode);
-		//untrack_count = untrack_all_pages(param.track_mode);
 		untrack_count =
 			kvm_stop_tracking(main_vm->vcpus[0], param.track_mode);
-		//printk("KVM_USPT_UNTRACK_ALL: untracked %ld pages\n",untrack_count);
 		r = 0;
+	} break;
+	case KVM_USP_INIT_POLL_API: {
+		usp_init_poll_api_t param;
+		printk("KVM_USP_INIT_POLL_API: got called\n");
+
+			if( copy_from_user(&param,argp, sizeof(param) ) ) {
+				printk("KVM_USP_INIT_POLL_API: failed to copy args\n");
+				return -EINVAL;
+			}
+
+			if( main_vm == NULL ) {
+				printk("KVM_USP_INIT_POLL_API: main_vm is not initialized, aborting!\n");
+				return -EFAULT;
+			}
+
+			ctx = kmalloc(sizeof(usp_poll_api_ctx_t),GFP_KERNEL);
+			
+			if( usp_poll_init_user_vaddr(param.pid,param.user_vaddr_shared_mem,ctx) ) {
+				printk("KVM_USP_INIT_POLL_API: failed to init api ctx\n");
+				return -EINVAL;
+			}
+
+			// //test interatction with shared memory
+			// printk("trying to touch shared mem\n");
+			// ctx->shared_mem_region->have_event = 0;
+			// printk("success! Trying to lock and unlock. Current lock value is %d\n",ctx->shared_mem_region->spinlock);
+			// raw_spinlock_lock(&ctx->shared_mem_region->spinlock);
+			// raw_spinlock_unlock(&ctx->shared_mem_region->spinlock);
+
+			printk("KVM_USP_INIT_POLL_API: success\n");
+			r = 0;
+	} break;
+	case KVM_USP_CLOSE_POLL_API: {
+		printk("KVM_USP_CLOSE_POLL_API: got called\n");
+			if( ctx == NULL ) {
+				printk("KVM_USP_CLOSE_POLL_API: ctx already null");
+				return -EINVAL;
+			}
+
+			if( usp_poll_close_api(ctx) ) {
+				printk("KVM_USP_CLOSE_POLL_API: failed to close ctx\n");
+				return -EINVAL;
+			}
+			kfree(ctx);
+
+			printk("KVM_USP_CLOSE_POLL_API: success\n");
+			r = 0;
 	} break;
 	default:
 		return kvm_arch_dev_ioctl(filp, ioctl, arg);
