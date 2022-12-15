@@ -4719,6 +4719,7 @@ static long kvm_dev_ioctl(struct file *filp,
 			printk("KVM_TRACK_PAGE: __track_single_page failed");
 		}
 		printk("KVM_TRACK_PAGE successfull!\n");
+		r = 0;
 	} break;
 	case KVM_UNTRACK_PAGE: {
 		track_page_param_t param;
@@ -4742,6 +4743,7 @@ static long kvm_dev_ioctl(struct file *filp,
 			printk("KVM_UNTRACK_PAGE: __track_single_page failed");
 		}
 		printk("KVM_UNTRACK_PAGE successfull!\n");
+		r = 0;
 	} break;
 	case KVM_TRACK_ALL_PAGES: {
 		track_all_pages_t param;
