@@ -12430,9 +12430,9 @@ bool __untrack_single_page(struct kvm_vcpu *vcpu, gfn_t gfn,
 
   if (slot != NULL && kvm_page_track_is_active(vcpu, gfn, mode)) {
 
-    spin_lock(&vcpu->kvm->mmu_lock);
+    write_lock(&vcpu->kvm->mmu_lock);
     kvm_slot_page_track_remove_page(vcpu->kvm, slot, gfn, mode);
-    spin_unlock(&vcpu->kvm->mmu_lock);
+    write_unlock(&vcpu->kvm->mmu_lock);
     ret = true;
 
   } else {
@@ -12468,9 +12468,9 @@ bool __track_single_page(struct kvm_vcpu *vcpu, gfn_t gfn,
   slot = kvm_vcpu_gfn_to_memslot(vcpu, gfn);
   if (slot != NULL && !kvm_page_track_is_active(vcpu, gfn, mode)) {
 
-    spin_lock(&vcpu->kvm->mmu_lock);
+    write_lock(&vcpu->kvm->mmu_lock);
     kvm_slot_page_track_add_page(vcpu->kvm, slot, gfn, mode);
-    spin_unlock(&vcpu->kvm->mmu_lock);
+    write_unlock(&vcpu->kvm->mmu_lock);
     ret = true;
 
   } else {
@@ -12507,12 +12507,12 @@ long kvm_start_tracking(struct kvm_vcpu *vcpu,enum kvm_page_track_mode mode ) {
 		     && !kvm_page_track_is_active(vcpu, 
 						  iterator, 
 						  mode)) {
-                        spin_lock(&vcpu->kvm->mmu_lock);
+                        write_lock(&vcpu->kvm->mmu_lock);
                         kvm_slot_page_track_add_page(vcpu->kvm, 
 						     slot, 
 						     iterator, 
 						     mode);
-                        spin_unlock(&vcpu->kvm->mmu_lock);
+                        write_unlock(&vcpu->kvm->mmu_lock);
                         count++;
                 }
                 srcu_read_unlock(&vcpu->kvm->srcu, idx);
@@ -12539,12 +12539,12 @@ long kvm_stop_tracking(struct kvm_vcpu *vcpu,enum kvm_page_track_mode mode ) {
 			     && kvm_page_track_is_active(vcpu, 
 							 iterator, 
 							 mode)) {
-				spin_lock(&vcpu->kvm->mmu_lock);
+				write_lock(&vcpu->kvm->mmu_lock);
 				kvm_slot_page_track_remove_page(vcpu->kvm, 
 								slot, 
 								iterator, 
 								mode);
-				spin_unlock(&vcpu->kvm->mmu_lock);
+				write_unlock(&vcpu->kvm->mmu_lock);
 				count++;
             	}
 		srcu_read_unlock(&vcpu->kvm->srcu, idx);
