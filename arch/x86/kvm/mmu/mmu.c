@@ -1363,8 +1363,8 @@ static void kvm_mmu_write_protect_pt_masked(struct kvm *kvm,
 		return;
 
 	while (mask) {
-		rmap_head = __gfn_to_rmap(slot->base_gfn + gfn_offset + __ffs(mask),
-					  PT_PAGE_TABLE_LEVEL, slot);
+		rmap_head = gfn_to_rmap(slot->base_gfn + gfn_offset + __ffs(mask),
+					  PG_LEVEL_4K, slot);
 		__rmap_protect(kvm, rmap_head, false, KVM_PAGE_TRACK_WRITE);
 
 		/* clear the first set bit */
