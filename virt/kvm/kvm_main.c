@@ -4841,6 +4841,29 @@ static long kvm_dev_ioctl(struct file *filp,
 			printk("KVM_USP_CLOSE_POLL_API: success\n");
 			r = 0;
 	} break;
+	case KVM_SEV_STEP_ENABLE: {
+		sev_step_param_t param;
+		printk("KVM_SEV_STEP_ENABLE: got called\n");
+
+		if( copy_from_user(&param,argp, sizeof(param) ) ) {
+			printk("KVM_SEV_STEP_ENABLE: failed to copy args\n");
+			return -EINVAL;
+		}
+
+		//init config
+		sev_step_config.tmict_value = param.tmict_value;
+		sev_step_config.need_init = true;
+
+		printk("KVM_SEV_STEP_ENABLE: success\n");
+		r = 0;
+	} break;
+	case KVM_SEV_STEP_DISABLE: {
+		printk("KVM_SEV_STEP_DISABLE: got called\n");
+		sev_step_config.need_disable = true;
+
+		printk("KVM_SEV_STEP_DISABLE: success\n");
+		r = 0;
+	} break;
 	default:
 		return kvm_arch_dev_ioctl(filp, ioctl, arg);
 	}

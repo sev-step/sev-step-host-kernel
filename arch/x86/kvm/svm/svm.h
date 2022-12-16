@@ -21,6 +21,7 @@
 
 #include <asm/svm.h>
 #include <asm/sev-common.h>
+#include "../kvm_cache_regs.h"
 
 #define __sme_page_pa(x) __sme_set(page_to_pfn(x) << PAGE_SHIFT)
 

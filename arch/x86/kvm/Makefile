@@ -7,6 +7,8 @@ ifeq ($(CONFIG_FRAME_POINTER),y)
 OBJECT_FILES_NON_STANDARD_vmenter.o := y
 endif
 
+KBUILD_EXTRA_SYMBOLS := ../../../drivers/crypto/ccp/Module.symvers
+
 KVM := ../../../virt/kvm
 
 kvm-y			+= $(KVM)/kvm_main.o $(KVM)/coalesced_mmio.o \
@@ -22,7 +24,7 @@ kvm-y			+= x86.o emulate.o i8259.o irq.o lapic.o \
 			   i8254.o ioapic.o irq_comm.o cpuid.o pmu.o mtrr.o \
 			   hyperv.o debugfs.o mmu/mmu.o mmu/page_track.o \
 			   mmu/spte.o userspace_page_track_api.o \
-			   raw_spinlock.o
+			   raw_spinlock.o my_idt.o sev-step.o isr_wrapper.o
 
 ifdef CONFIG_HYPERV
 kvm-y			+= kvm_onhyperv.o

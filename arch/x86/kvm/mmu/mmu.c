@@ -1261,6 +1261,7 @@ static bool spte_protect(u64 *sptep, bool pt_protect,
 
 	} else if( mode == KVM_PAGE_TRACK_RESET_ACCESSED) {
 		spte = spte & ~PT_ACCESSED_MASK;
+		shouldFlush = true;
 	} else if(mode == KVM_PAGE_TRACK_ACCESS) {
 		spte = spte & ~PT_PRESENT_MASK;
 		spte = spte & ~PT_WRITABLE_MASK;
@@ -3895,22 +3896,31 @@ static bool page_fault_handle_page_track(struct kvm_vcpu *vcpu,
 					 u32 error_code, gfn_t gfn)
 {
 	/* Send page fault event to userspace */
-
-	//check if page is tracked and if ctx is initialized
-	//otherwise no page fault event is sent to userspace
-	if(kvm_page_track_is_active(vcpu, gfn, KVM_PAGE_TRACK_WRITE) && ctx_initialized()) {
+	int modes[] = {KVM_PAGE_TRACK_WRITE,KVM_PAGE_TRACK_ACCESS,KVM_PAGE_TRACK_EXEC};
+	bool was_tracked = false;
+	int i;
+	for(i = 0; i < sizeof(modes) / sizeof(modes[0]); i++ ) {
+		//check if page is tracked and if ctx is initialized
+		//otherwise no page fault event is sent to userspace
+		if(kvm_page_track_is_active(vcpu,gfn,modes[i]) && ctx_initialized()) {
+			__untrack_single_page(vcpu, gfn, modes[i]);
+			was_tracked = true;
+		}
+	}
+	
+	if(was_tracked) {
 		usp_page_fault_event_t pf_event = {
 			//.id = ,
 			.faulted_gpa = (uint64_t)(gfn << PAGE_SHIFT)
 		};
 
-		__untrack_single_page(vcpu, gfn, KVM_PAGE_TRACK_WRITE);
+		//sent page fault event
 		if(usp_send_and_block(ctx, PAGE_FAULT_EVENT, (void *)&pf_event) == 1) {
-			printk("usp_send_and_block: Failed in page fault handler\n");
+			if(!ctx->force_reset) // on forced reset -> no error
+				printk("usp_send_and_block: Failed in page fault handler\n");
 		}
 	}
 	
-
 	if (unlikely(error_code & PFERR_RSVD_MASK))
 		return false;
 
@@ -3922,7 +3932,7 @@ static bool page_fault_handle_page_track(struct kvm_vcpu *vcpu,
 	 * guest is writing the page which is write tracked which can
 	 * not be fixed by page fault handler.
 	 */
-	if (kvm_page_track_is_active(vcpu, gfn, KVM_PAGE_TRACK_WRITE))
+	if (kvm_page_track_is_active(vcpu, gfn, KVM_PAGE_TRACK_WRITE) || kvm_page_track_is_active(vcpu, gfn, KVM_PAGE_TRACK_ACCESS))
 		return true;
 
 	return false;

@@ -40,6 +40,12 @@
 #include <asm/virtext.h>
 #include "trace.h"
 
+#define __ex(x) __kvm_handle_fault_on_reboot(x)
+
+//SEV STEP
+#include <linux/my_idt.h>
+#include <linux/userspace_page_track_api.h>
+
 #include "svm.h"
 #include "svm_ops.h"
 
@@ -2104,6 +2110,12 @@ static int nmi_interception(struct kvm_vcpu *vcpu)
 
 static int smi_interception(struct kvm_vcpu *vcpu)
 {
+	struct vcpu_svm *svm = to_svm(vcpu);
+	++svm->vcpu.stat.irq_exits;
+	if(decrypt_rip) {
+		sev_step_config.rip = sev_step_get_rip(svm);
+		decrypt_rip = false;
+	}
 	return 1;
 }
 
@@ -3789,9 +3801,43 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 	unsigned long vmcb_pa = svm->current_vmcb->pa;
 
 	kvm_guest_enter_irqoff();
-
+	
+	local_irq_enable();
+	//luca: also includes sev-snp, i.e. is inclusive hierachy
 	if (sev_es_guest(vcpu->kvm)) {
+
+		if(sev_step_config.active) {
+			//suppress injection of virtual apic interrupt to prevent jumping to intr handler in vm
+			if( ( svm->vmcb->control.event_inj & 0xff)== 0xec ) {
+				printk("ignoring exception injection due to active trace\n");
+				svm_cancel_injection(&(svm->vcpu));
+			}
+
+			svm_flush_tlb(&(svm->vcpu)); //flushes whole tlb of guest //HUGE IMPROVEMENT!!!
+		}
+		
+		//in this function we also start the cache priming
+		start_apic_timer(svm);
+
+		//luca: assembly code in svm/vmenter.S
 		__svm_sev_es_vcpu_run(vmcb_pa);
+
+
+		if(sev_step_config.active)
+			process_perfs(1);
+
+		if(sev_step_config.active) {
+			sev_step_event_t ss_event = {
+				.counted_instructions = sev_step_config.counted_instructions,
+				.sev_rip = sev_step_config.rip, 
+			};
+			//sent sev step event
+			if(usp_send_and_block(ctx, SEV_STEP_EVENT, (void *)&ss_event) == 1) {
+				if(!ctx->force_reset) // on forced reset -> no error
+					printk("usp_send_and_block: Failed in page fault handler\n");
+			}
+		}
+
 	} else {
 		struct svm_cpu_data *sd = per_cpu(svm_data, vcpu->cpu);
 
@@ -3873,6 +3919,37 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 	 */
 	if (!static_cpu_has(X86_FEATURE_V_SPEC_CTRL))
 		x86_spec_ctrl_set_guest(svm->spec_ctrl, svm->virt_spec_ctrl);
+
+	
+	//Start of sev step code
+	mutex_lock(&sev_step_config_mutex);
+	if(sev_step_config.need_init) {
+		setup_perfs();
+		printk("svm_vcpu_run: prepared PERF");
+		my_idt_install_handler();
+		printk("svm_vcpu_run: installed my_idt handler\n");
+		printk("svm_vcpu_run: Backup apic timer\n");
+		apic_backup();
+
+		sev_step_config.need_init = false;
+		sev_step_config.active = true;
+		
+	} else if (sev_step_config.need_disable) {
+		printk("svm_vcpu_run: Restoring old apic timer values\n");
+		apic_restore();
+
+		printk("svm_vcpu_run: sending fake intr to vm to kick apic timer again\n");
+		svm->vcpu.arch.interrupt.injected = true;
+		svm->vcpu.arch.interrupt.soft = false; //not quite sure, seems to work
+		svm->vcpu.arch.interrupt.nr = 0xec;
+		svm_set_irq(&(svm->vcpu));
+
+		sev_step_config.need_disable = false;
+		sev_step_config.active = false;
+
+	}
+	mutex_unlock(&sev_step_config_mutex);
+	//End of sev step code
 
 	svm_vcpu_enter_exit(vcpu);
 

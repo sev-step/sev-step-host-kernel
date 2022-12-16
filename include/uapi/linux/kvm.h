@@ -2078,5 +2078,7 @@ struct kvm_stats_desc {
 #define KVM_UNTRACK_PAGE _IOWR(KVMIO, 0xe, track_page_param_t)
 #define KVM_USP_INIT_POLL_API _IOWR(KVMIO, 0xf, usp_init_poll_api_t)
 #define KVM_USP_CLOSE_POLL_API _IO(KVMIO, 0x10)
+#define KVM_SEV_STEP_ENABLE _IOWR(KVMIO, 0x11, sev_step_param_t)
+#define KVM_SEV_STEP_DISABLE _IO(KVMIO, 0x12)
 
 #endif /* __LINUX_KVM_H */

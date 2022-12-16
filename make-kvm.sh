@@ -1,7 +1,5 @@
 #/bin/sh
 cores=$(nproc --all)
-#sudo -u luca make distclean &&
-#./my-configure-sev.sh &&
 EXTRAVERSION=""
 make clean M=arch/x86/kvm/ &&
 make -j $cores scripts &&
@@ -9,7 +7,7 @@ make -j $cores prepare &&
 make -j $cores modules_prepare &&
 cp /usr/src/linux-headers-`uname -r`/Module.symvers arch/x86/kvm/Module.symvers  &&
 cp /usr/src/linux-headers-`uname -r`/Module.symvers Module.symvers  &&
-chown luca:luca arch/x86/kvm/Module.symvers
+chown valentin:valentin arch/x86/kvm/Module.symvers
 cp "/boot/System.map-$(uname -r)" . 
 cp "/boot/System.map-$(uname -r)" arch/x86/kvm/
 touch .scmversion &&

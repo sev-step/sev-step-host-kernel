@@ -5,15 +5,19 @@
 #include <linux/userspace_page_track_api.h>
 #include <linux/raw_spinlock.h>
 #include <asm/string.h>
-
+#include <linux/sev-step.h>
 
 usp_poll_api_ctx_t* ctx = NULL;
+EXPORT_SYMBOL(ctx);
 
 int get_size_for_event(usp_event_type_t event_type, uint64_t* size) {
     switch (event_type)
     {
         case PAGE_FAULT_EVENT:
             *size = sizeof(usp_page_fault_event_t);
+            return 0;
+        case SEV_STEP_EVENT:
+            *size = sizeof(sev_step_event_t);
             return 0;
         default:
             return 1;
@@ -78,6 +82,7 @@ we also reset have_event
     printk("usp_send_and_block: unlocked and done\n");
     return 0;
 }
+EXPORT_SYMBOL(usp_send_and_block);
 
 int usp_poll_init_user_vaddr(int pid,uint64_t user_vaddr_shared_mem,usp_poll_api_ctx_t* ctx) {
     struct page *shared_mem_page;

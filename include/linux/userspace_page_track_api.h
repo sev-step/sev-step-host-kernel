@@ -17,6 +17,7 @@ typedef struct {
 
 typedef enum {
     PAGE_FAULT_EVENT,
+    SEV_STEP_EVENT,
 } usp_event_type_t;
 
 typedef struct {
