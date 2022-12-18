@@ -4836,7 +4836,12 @@ static long kvm_dev_ioctl(struct file *filp,
 				printk("KVM_USP_CLOSE_POLL_API: failed to close ctx\n");
 				return -EINVAL;
 			}
+			
 			kfree(ctx);
+
+			// set to null to prevent page fault events 
+			// being send after api is closed
+			ctx = NULL;
 
 			printk("KVM_USP_CLOSE_POLL_API: success\n");
 			r = 0;
