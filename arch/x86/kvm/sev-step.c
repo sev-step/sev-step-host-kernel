@@ -2,6 +2,9 @@
 #include <linux/vmalloc.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
+#include <asm/svm.h> //struct vmcb_save_area
+#include <linux/psp-sev.h>
+
 #include <linux/sev-step.h>
 
 DEFINE_MUTEX(sev_step_config_mutex);
@@ -12,8 +15,15 @@ sev_step_config_t sev_step_config = {
     .need_init = false,
     .tmict_value = 0,
     .active = false,
-    .counted_instructions = 404,
+    .counted_instructions = 0,
     .rip = 0,
+    .main_vm = NULL,
+    .decrypt_rip = false,
+    .waitingForTimer = false,
+    .idt_init = false,
+    .old_apic_lvtt = 0,
+    .old_apic_tdcr = 0,
+    .old_apic_tmict = 0,
 };
 EXPORT_SYMBOL(sev_step_config);
 
@@ -39,6 +49,160 @@ uint64_t perf_ctl_to_u64(perf_ctl_config_t * config) {
 	return result;
 
 }
+
+/* Need to be done this way, if moved to sev-step.h there are many building errors */
+// Better solution? TODO
+//uint64_t sev_step_get_rip(struct vcpu_svm* svm); prototyp is in svm.c
+
+static int __my_sev_issue_dbg_cmd(struct kvm *kvm, unsigned long src,
+			       unsigned long dst, int size,
+			       int *error)
+{
+	struct kvm_sev_info *sev = &to_kvm_svm(kvm)->sev_info;
+	struct sev_data_dbg *data;
+	int ret;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL_ACCOUNT);
+	if (!data)
+		return -ENOMEM;
+
+	data->handle = sev->handle;
+	data->dst_addr = dst;
+	data->src_addr = src;
+	data->len = size;
+
+	/*ret = sev_issue_cmd(kvm,
+			     SEV_CMD_DBG_DECRYPT,
+			    data, error);*/
+	ret = sev_do_cmd(SEV_CMD_DBG_DECRYPT, data, error);
+	kfree(data);
+	return ret;
+}
+
+int my_sev_decrypt(struct kvm* kvm, void* dst_vaddr, void* src_vaddr, uint64_t dst_paddr, uint64_t src_paddr, uint64_t len, int* api_res) {
+
+	int call_res;
+	call_res  = 0x1337;
+	*api_res = 0x1337;
+
+
+	if( dst_paddr % PAGE_SIZE != 0 || src_paddr % PAGE_SIZE != 0) {
+		printk("decrypt: for now, src_paddr, and dst_paddr must be page aligned");
+		return -1;
+	}
+
+	if( len > PAGE_SIZE ) {
+		printk("decrypt: for now, can be at most 4096 byte");
+		return -1;
+	}
+
+	memset(dst_vaddr,0,PAGE_SIZE);
+
+	//clflush_cache_range(src_vaddr, PAGE_SIZE);
+	//clflush_cache_range(dst_vaddr, PAGE_SIZE);
+	wbinvd_on_all_cpus();
+
+	call_res = __my_sev_issue_dbg_cmd(kvm, __sme_set(src_paddr), 
+		__sme_set(dst_paddr), len, api_res);
+
+	return call_res;
+
+}
+EXPORT_SYMBOL(my_sev_decrypt);
+
+int decrypt_vmsa(struct vcpu_svm* svm, struct vmcb_save_area* save_area) {
+
+	uint64_t src_paddr, dst_paddr;
+	void * dst_vaddr;
+	void * src_vaddr;
+	struct page * dst_page;
+	int call_res,api_res;
+	call_res = 1337;
+	api_res = 1337;
+	
+	src_vaddr = svm->vmsa;
+	src_paddr = svm->vmcb->control.vmsa_pa;
+
+	if( src_paddr % 16 != 0) {
+		printk("decrypt_vmsa: src_paddr was not 16b aligned");
+	}
+
+	if( sizeof( struct vmcb_save_area) % 16 != 0 ) {
+		printk("decrypt_vmsa: size of vmcb_save_area is not 16 b aligned\n");
+	}
+
+	dst_page = alloc_page(GFP_KERNEL);
+	dst_vaddr =  vmap(&dst_page, 1, 0, PAGE_KERNEL);
+	dst_paddr = page_to_pfn(dst_page) << PAGE_SHIFT;
+	memset(dst_vaddr,0,PAGE_SIZE);
+
+	
+
+	if( dst_paddr % 16 != 0 ) {
+		printk("decrypt_vmsa: dst_paddr was not 16 byte aligned");
+	}
+
+	//printk("src_paddr = 0x%llx dst_paddr = 0x%llx\n", __sme_clr(src_paddr), __sme_clr(dst_paddr));
+	//printk("Sizeof vmcb_save_area is: 0x%lx\n", sizeof( struct vmcb_save_area) );
+
+
+	call_res = __my_sev_issue_dbg_cmd(svm->vcpu.kvm, __sme_set(src_paddr), __sme_set(dst_paddr), sizeof(struct vmcb_save_area), &api_res);
+
+
+	//printk("decrypt_vmsa: result of call was %d, result of api command was %d\n",call_res, api_res);
+
+	//todo error handling
+	if( api_res != 0 ) {
+		printk("api returned error code\n");
+		__free_page(dst_page);
+		return -1;
+	}
+
+	memcpy(save_area, dst_vaddr, sizeof( struct vmcb_save_area) );
+
+
+	__free_page(dst_page);
+
+	return 0;
+
+
+}
+
+/*
+ * Contains a switch to work  SEV and SEV-ES
+ */
+uint64_t sev_step_get_rip(struct vcpu_svm* svm) {
+	struct vmcb_save_area* save_area;
+	struct kvm * kvm;
+	struct kvm_sev_info *sev;
+	uint64_t rip;
+
+
+	kvm = svm->vcpu.kvm;
+	sev = &to_kvm_svm(kvm)->sev_info;
+
+	//for sev-es we need to use the debug api, to decrypt the vmsa
+	if( sev->active && sev->es_active) {
+		int res;
+		save_area = vmalloc(sizeof(struct vmcb_save_area) );
+		memset(save_area,0, sizeof(struct vmcb_save_area));
+
+		res = decrypt_vmsa(svm, save_area);
+		if( res != 0) {
+			printk("sev_step_get_rip failed to decrypt\n");
+			return 0;
+		}
+
+		rip =  save_area->rip;
+
+		vfree(save_area);
+	} else { //otherwise we can just access as plaintexts
+		rip = svm->vmcb->save.rip;
+	}
+	return rip;
+
+}
+EXPORT_SYMBOL(sev_step_get_rip);
 
 void write_ctl(perf_ctl_config_t * config, int cpu, uint64_t ctl_msr){
 	wrmsrl_on_cpu(cpu, ctl_msr, perf_ctl_to_u64(config)); //always returns zero

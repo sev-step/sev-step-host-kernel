@@ -7,10 +7,16 @@
 #include <linux/kvm_types.h>
 #include <asm/kvm_page_track.h>
 
+#include "desc.h"
 
 //
 // SEV STEP Types
 //
+typedef struct {
+    gate_desc_t *base;
+    size_t     entries;
+} idt_t;
+
 typedef struct {
     uint32_t tmict_value;
 	bool need_disable;
@@ -19,6 +25,16 @@ typedef struct {
 	uint32_t counted_instructions;
 	uint64_t rip;
 	struct kvm* main_vm;
+	bool decrypt_rip;
+	bool waitingForTimer;
+
+	/* All values for old apic config, maybe new struct? TODO */
+	idt_t idt;
+	bool idt_init;
+	uint32_t old_apic_lvtt;
+	uint32_t old_apic_tdcr;
+	uint32_t old_apic_tmict;
+	gate_desc_t old_idt_gate;
 } sev_step_config_t;
 
 typedef struct {
@@ -73,5 +89,6 @@ void write_ctl(perf_ctl_config_t * config, int cpu, uint64_t ctl_msr);
 void read_ctr(uint64_t ctr_msr, int cpu, uint64_t* result);
 void setup_perfs(void);
 void process_perfs(int mode);
+int my_sev_decrypt(struct kvm* kvm, void* dst_vaddr, void* src_vaddr, uint64_t dst_paddr, uint64_t src_paddr, uint64_t len, int* api_res);
 
 #endif

@@ -2108,13 +2108,15 @@ static int nmi_interception(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
+uint64_t sev_step_get_rip(struct vcpu_svm* svm); //defined in sev-step.c
+
 static int smi_interception(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 	++svm->vcpu.stat.irq_exits;
-	if(decrypt_rip) {
+	if(sev_step_config.decrypt_rip) {
 		sev_step_config.rip = sev_step_get_rip(svm);
-		decrypt_rip = false;
+		sev_step_config.decrypt_rip = false;
 	}
 	return 1;
 }
