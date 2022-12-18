@@ -2114,9 +2114,9 @@ static int smi_interception(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 	++svm->vcpu.stat.irq_exits;
-	if(sev_step_config.decrypt_rip) {
-		sev_step_config.rip = sev_step_get_rip(svm);
-		sev_step_config.decrypt_rip = false;
+	if(global_sev_step_config.decrypt_rip) {
+		global_sev_step_config.rip = sev_step_get_rip(svm);
+		global_sev_step_config.decrypt_rip = false;
 	}
 	return 1;
 }
@@ -3808,7 +3808,7 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 	//luca: also includes sev-snp, i.e. is inclusive hierachy
 	if (sev_es_guest(vcpu->kvm)) {
 
-		if(sev_step_config.active) {
+		if(global_sev_step_config.active) {
 			//suppress injection of virtual apic interrupt to prevent jumping to intr handler in vm
 			if( ( svm->vmcb->control.event_inj & 0xff)== 0xec ) {
 				printk("ignoring exception injection due to active trace\n");
@@ -3819,19 +3819,20 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		}
 		
 		//in this function we also start the cache priming
-		my_idt_start_apic_timer(svm);
-
+		my_idt_start_apic_timer(&global_sev_step_config, svm);
+		
 		//luca: assembly code in svm/vmenter.S
 		__svm_sev_es_vcpu_run(vmcb_pa);
 
 
-		if(sev_step_config.active)
-			calculate_steps(1);
+		if(global_sev_step_config.active)
+			calculate_steps(&global_sev_step_config);
 
-		if(sev_step_config.active) {
+
+		if(global_sev_step_config.active) {
 			sev_step_event_t ss_event = {
-				.counted_instructions = sev_step_config.counted_instructions,
-				.sev_rip = sev_step_config.rip, 
+				.counted_instructions = global_sev_step_config.counted_instructions,
+				.sev_rip = global_sev_step_config.rip, 
 			};
 			//sent sev step event
 			if(usp_send_and_block(ctx, SEV_STEP_EVENT, (void *)&ss_event) == 1) {
@@ -3925,20 +3926,20 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 	
 	//Start of sev step code
 	mutex_lock(&sev_step_config_mutex);
-	if(sev_step_config.need_init) {
+	if(global_sev_step_config.need_init) {
 		setup_perfs();
 		printk("svm_vcpu_run: prepared PERF");
-		my_idt_install_handler();
+		my_idt_install_handler(&global_sev_step_config);
 		printk("svm_vcpu_run: installed my_idt handler\n");
 		printk("svm_vcpu_run: Backup apic timer\n");
-		apic_backup();
+		apic_backup(&global_sev_step_config);
 
-		sev_step_config.need_init = false;
-		sev_step_config.active = true;
+		global_sev_step_config.need_init = false;
+		global_sev_step_config.active = true;
 		
-	} else if (sev_step_config.need_disable) {
+	} else if (global_sev_step_config.need_disable) {
 		printk("svm_vcpu_run: Restoring old apic timer values\n");
-		apic_restore();
+		apic_restore(&global_sev_step_config);
 
 		printk("svm_vcpu_run: sending fake intr to vm to kick apic timer again\n");
 		svm->vcpu.arch.interrupt.injected = true;
@@ -3946,8 +3947,8 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 		svm->vcpu.arch.interrupt.nr = 0xec;
 		svm_set_irq(&(svm->vcpu));
 
-		sev_step_config.need_disable = false;
-		sev_step_config.active = false;
+		global_sev_step_config.need_disable = false;
+		global_sev_step_config.active = false;
 
 	}
 	mutex_unlock(&sev_step_config_mutex);

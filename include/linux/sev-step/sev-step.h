@@ -73,7 +73,7 @@ typedef struct {
     uint32_t tmict_value;
 } sev_step_param_t;
 
-extern sev_step_config_t sev_step_config;
+extern sev_step_config_t global_sev_step_config;
 extern struct mutex sev_step_config_mutex;
 
 //
@@ -89,7 +89,7 @@ uint64_t perf_ctl_to_u64(perf_ctl_config_t * config);
 void write_ctl(perf_ctl_config_t * config, int cpu, uint64_t ctl_msr);
 void read_ctr(uint64_t ctr_msr, int cpu, uint64_t* result);
 void setup_perfs(void);
-void calculate_steps(int mode);
+void calculate_steps(sev_step_config_t *config);
 int my_sev_decrypt(struct kvm* kvm, void* dst_vaddr, void* src_vaddr, uint64_t dst_paddr, uint64_t src_paddr, uint64_t len, int* api_res);
 
 #endif

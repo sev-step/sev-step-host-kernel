@@ -11,7 +11,7 @@
 DEFINE_MUTEX(sev_step_config_mutex);
 EXPORT_SYMBOL(sev_step_config_mutex);
 
-sev_step_config_t sev_step_config = {
+sev_step_config_t global_sev_step_config = {
     .need_disable = false,
     .need_init = false,
     .tmict_value = 0,
@@ -26,7 +26,7 @@ sev_step_config_t sev_step_config = {
     .old_apic_tdcr = 0,
     .old_apic_tmict = 0,
 };
-EXPORT_SYMBOL(sev_step_config);
+EXPORT_SYMBOL(global_sev_step_config);
 
 //used to store performance counter values; 6 counters, 2 readings per counter
 uint64_t perf_reads[6][2];
@@ -251,23 +251,18 @@ EXPORT_SYMBOL(setup_perfs);
 
 //reads perfs.if called with "0", data is gathered. if called
 //with "1" data is gathered on compared to previous data.
-void calculate_steps(int mode) {
+void calculate_steps(sev_step_config_t *config) {
     if( perf_cpu != smp_processor_id() ) {
         printk("calculate_steps: called on cpu %d but setup_perfs was called on cpu %d\n", smp_processor_id(), perf_cpu);
     }
 
-    if(!sev_step_config.perf_init) {
+    if(!config->perf_init) {
         read_ctr(CTR_MSR_0, perf_cpu, &perf_reads[0][0]);        
-        sev_step_config.perf_init = true;
-    } else if ( mode == 1) {
-        if(!sev_step_config.perf_init) {
-            printk("calculate_steps(1) called with out previous call to calculate_steps(0)\n");
-        }
-        read_ctr(CTR_MSR_0, perf_cpu, &perf_reads[0][1] );
-        sev_step_config.counted_instructions = perf_reads[0][1] - perf_reads[0][0] -1;
-        sev_step_config.perf_init = false;
+        config->perf_init = true;
     } else {
-        printk("calculate_steps called with invalid mode arg\n");
+        read_ctr(CTR_MSR_0, perf_cpu, &perf_reads[0][1] );
+        config->counted_instructions = perf_reads[0][1] - perf_reads[0][0] -1;
+        config->perf_init = false;
     }
 }
 EXPORT_SYMBOL(calculate_steps);

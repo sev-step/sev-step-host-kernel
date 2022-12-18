@@ -1199,9 +1199,9 @@ static void kvm_destroy_vm(struct kvm *kvm)
 	hardware_disable_all();
 	mmdrop(mm);
 
-	if( sev_step_config.main_vm == kvm ) {
+	if( global_sev_step_config.main_vm == kvm ) {
 		printk("Detected shutdown of tracked VM\n");
-		sev_step_config.main_vm = NULL;
+		global_sev_step_config.main_vm = NULL;
 	}
 }
 
@@ -4658,7 +4658,7 @@ static int kvm_dev_ioctl_create_vm(unsigned long type)
 	fd_install(r, file);
 
 	printk("setting main_vm to newly started vm\n");
-	sev_step_config.main_vm = kvm;
+	global_sev_step_config.main_vm = kvm;
 
 	return r;
 
@@ -4718,7 +4718,7 @@ static long kvm_dev_ioctl(struct file *filp,
 			return -EFAULT;
 		}
 
-		if (!__track_single_page(sev_step_config.main_vm->vcpus[0],
+		if (!__track_single_page(global_sev_step_config.main_vm->vcpus[0],
 					 param.gpa >> PAGE_SHIFT,
 					 param.track_mode)) {
 			printk("KVM_TRACK_PAGE: __track_single_page failed");
@@ -4743,7 +4743,7 @@ static long kvm_dev_ioctl(struct file *filp,
 			return -EFAULT;
 		}
 
-		if (!__untrack_single_page(sev_step_config.main_vm->vcpus[0],
+		if (!__untrack_single_page(global_sev_step_config.main_vm->vcpus[0],
 					   param.gpa >> PAGE_SHIFT,
 					   param.track_mode)) {
 			printk("KVM_UNTRACK_PAGE: __track_single_page failed");
@@ -4761,7 +4761,7 @@ static long kvm_dev_ioctl(struct file *filp,
 			return -EINVAL;
 		}
 
-		if (sev_step_config.main_vm == NULL) {
+		if (global_sev_step_config.main_vm == NULL) {
 			printk("KVM_TRACK_ALL_PAGES: main_vm is not initialized, aborting!\n");
 			return -EFAULT;
 		}
@@ -4774,7 +4774,7 @@ static long kvm_dev_ioctl(struct file *filp,
 		}
 
 		tracked_pages =
-			kvm_start_tracking(sev_step_config.main_vm->vcpus[0], param.track_mode);
+			kvm_start_tracking(global_sev_step_config.main_vm->vcpus[0], param.track_mode);
 		r = 0;
 	} break;
 	case KVM_UNTRACK_ALL_PAGES: {
@@ -4785,7 +4785,7 @@ static long kvm_dev_ioctl(struct file *filp,
 			return -EINVAL;
 		}
 
-		if (sev_step_config.main_vm == NULL) {
+		if (global_sev_step_config.main_vm == NULL) {
 			printk("UNTRACK_ALL_PAGES: main_vm is not initialized, aborting!\n");
 			return -EFAULT;
 		}
@@ -4798,7 +4798,7 @@ static long kvm_dev_ioctl(struct file *filp,
 		}
 
 		untrack_count =
-			kvm_stop_tracking(sev_step_config.main_vm->vcpus[0], param.track_mode);
+			kvm_stop_tracking(global_sev_step_config.main_vm->vcpus[0], param.track_mode);
 		r = 0;
 	} break;
 	case KVM_USP_INIT_POLL_API: {
@@ -4810,7 +4810,7 @@ static long kvm_dev_ioctl(struct file *filp,
 				return -EINVAL;
 			}
 
-			if( sev_step_config.main_vm == NULL ) {
+			if( global_sev_step_config.main_vm == NULL ) {
 				printk("KVM_USP_INIT_POLL_API: main_vm is not initialized, aborting!\n");
 				return -EFAULT;
 			}
@@ -4856,15 +4856,15 @@ static long kvm_dev_ioctl(struct file *filp,
 		}
 
 		//init config
-		sev_step_config.tmict_value = param.tmict_value;
-		sev_step_config.need_init = true;
+		global_sev_step_config.tmict_value = param.tmict_value;
+		global_sev_step_config.need_init = true;
 
 		printk("KVM_SEV_STEP_ENABLE: success\n");
 		r = 0;
 	} break;
 	case KVM_SEV_STEP_DISABLE: {
 		printk("KVM_SEV_STEP_DISABLE: got called\n");
-		sev_step_config.need_disable = true;
+		global_sev_step_config.need_disable = true;
 
 		printk("KVM_SEV_STEP_DISABLE: success\n");
 		r = 0;

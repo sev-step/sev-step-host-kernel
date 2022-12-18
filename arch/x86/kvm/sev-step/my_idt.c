@@ -59,19 +59,19 @@ static void get_idt( idt_t *idt ) {
 	idt->entries = entries;
 }
 
-void install_kernel_irq_handler(void *asm_handler, int vector) {
+void install_kernel_irq_handler(sev_step_config_t *config, void *asm_handler, int vector) {
 	gate_desc_t *gate;
 
-	 if( !sev_step_config.idt_init ) {
-		 get_idt(&sev_step_config.idt);
-		 sev_step_config.idt_init = true;
+	 if( !config->idt_init ) {
+		 get_idt(&config->idt);
+		 config->idt_init = true;
 	 }
 
-    gate = gate_ptr(sev_step_config.idt.base, vector);
+    gate = gate_ptr(config->idt.base, vector);
 	printk("old gate:\n");
 	dump_gate(gate,vector);
 	//store old entry
-	memcpy(&sev_step_config.old_idt_gate, gate, sizeof(gate_desc_t));
+	memcpy(&config->old_idt_gate, gate, sizeof(gate_desc_t));
 
 
     gate->offset_low    = PTR_LOW(asm_handler);
@@ -85,16 +85,16 @@ void install_kernel_irq_handler(void *asm_handler, int vector) {
     gate->ist = 0; // new stack for interrupt handling?
 }
 
-static void restore_kernel_irq_handler(int vector) {
+static void restore_kernel_irq_handler(sev_step_config_t *config, int vector) {
 	gate_desc_t *gate;
 
-	 if( !sev_step_config.idt_init ) {
-		 get_idt(&sev_step_config.idt);
-		 sev_step_config.idt_init = true;
+	 if( !config->idt_init ) {
+		 get_idt(&config->idt);
+		 config->idt_init = true;
 	 }
 
-    gate = gate_ptr(sev_step_config.idt.base, vector);
-	memcpy(gate,&sev_step_config.old_idt_gate, sizeof(gate_desc_t));
+    gate = gate_ptr(config->idt.base, vector);
+	memcpy(gate,&config->old_idt_gate, sizeof(gate_desc_t));
 }
 
  
@@ -103,34 +103,34 @@ void my_handler(void) {
 	apic_write(APIC_EOI, 0x0); //aknowledge interrupt
 	printk("my handler is running on: %d\n", smp_processor_id());
 
-	sev_step_config.waitingForTimer = false;
-	sev_step_config.decrypt_rip = true; //requset rip printing in svm.c handler
+	global_sev_step_config.waitingForTimer = false;
+	global_sev_step_config.decrypt_rip = true; //requset rip printing in svm.c handler
 	put_cpu();
 }
 
-void apic_restore() {
+void apic_restore(sev_step_config_t *config) {
 	get_cpu();
 	printk("restoring old irq handler\n");
-	restore_kernel_irq_handler(IRQ_NUMBER);
-	apic_write(APIC_LVTT, sev_step_config.old_apic_lvtt); //0x320
-	apic_write(APIC_TDCR, sev_step_config.old_apic_tdcr); //0x3e0
+	restore_kernel_irq_handler(config, IRQ_NUMBER);
+	apic_write(APIC_LVTT, config->old_apic_lvtt); //0x320
+	apic_write(APIC_TDCR, config->old_apic_tdcr); //0x3e0
 	//without this write, the timer does not seem to be actually startet
-	apic_write(APIC_TMICT, sev_step_config.old_apic_tmict);
+	apic_write(APIC_TMICT, config->old_apic_tmict);
 	put_cpu();
-	sev_step_config.waitingForTimer = false;
+	config->waitingForTimer = false;
 
 }
 EXPORT_SYMBOL(apic_restore);
 
-void setup_apic_timer(uint32_t tmict_value) {
+void setup_apic_timer(sev_step_config_t *config, uint32_t tmict_value) {
 	 get_cpu(); //disable preemption => cannot be moved to antoher cpu
 	 printk("setup_apic is running on: %d\n", smp_processor_id());
 	 //start apic_timer_oneshot
-	sev_step_config.old_apic_lvtt = apic_read(APIC_LVTT);
-    sev_step_config.old_apic_tdcr = apic_read(APIC_TDCR);
-	sev_step_config.old_apic_tmict = apic_read(APIC_TMICT);
+	config->old_apic_lvtt = apic_read(APIC_LVTT);
+    config->old_apic_tdcr = apic_read(APIC_TDCR);
+	config->old_apic_tmict = apic_read(APIC_TMICT);
 	printk("in setup: old_apic_lvtt = 0x%x, old_apic_tdcr = 0x%x, old_apic_tmict = 0x%x",
-		sev_step_config.old_apic_lvtt, sev_step_config.old_apic_tdcr, sev_step_config.old_apic_tmict);
+		config->old_apic_lvtt, config->old_apic_tdcr, config->old_apic_tmict);
 	 
     apic_write(APIC_LVTT, IRQ_NUMBER | APIC_LVT_TIMER_ONESHOT);
     apic_write(APIC_TDCR, APIC_TDR_DIV_2);
@@ -141,7 +141,7 @@ void setup_apic_timer(uint32_t tmict_value) {
     // see also: http://wiki.osdev.org/APIC_timer)
 	 
 	 //start apic_timer_irq
-	 sev_step_config.waitingForTimer = true;
+	 config->waitingForTimer = true;
 	 apic_write(APIC_TMICT, tmict_value); 
 	//printk("setup_apic done at %llu\n", ktime_get_ns());
 	 put_cpu(); //enable preemption
@@ -149,23 +149,23 @@ void setup_apic_timer(uint32_t tmict_value) {
 }
 EXPORT_SYMBOL(setup_apic_timer);
 
-void apic_backup() {
+void apic_backup(sev_step_config_t *config) {
  	get_cpu(); //disable preemption => cannot be moved to antoher cpu
 	printk("apic_backup is running on: %d\n", smp_processor_id());
 	//start apic_timer_oneshot
-	sev_step_config.old_apic_lvtt = apic_read(APIC_LVTT);
-    sev_step_config.old_apic_tdcr = apic_read(APIC_TDCR);
-	sev_step_config.old_apic_tmict = apic_read(APIC_TMICT);
+	config->old_apic_lvtt = apic_read(APIC_LVTT);
+    config->old_apic_tdcr = apic_read(APIC_TDCR);
+	config->old_apic_tmict = apic_read(APIC_TMICT);
 	put_cpu();
 }
 EXPORT_SYMBOL(apic_backup);
 
-void apic_restart_timer(uint32_t tmict_value) {
+void apic_restart_timer(sev_step_config_t *config, uint32_t tmict_value) {
 	get_cpu();	
 	printk("apic_restart_timer is running on: %d\n", smp_processor_id());
     apic_write(APIC_LVTT, IRQ_NUMBER | APIC_LVT_TIMER_ONESHOT);
     apic_write(APIC_TDCR, APIC_TDR_DIV_2);
-	sev_step_config.waitingForTimer = true;
+	config->waitingForTimer = true;
 	apic_write(APIC_TMICT, tmict_value); 
 	//printk("apic_restart_timer done at %llu\n", ktime_get_ns());
 	put_cpu();
@@ -173,28 +173,28 @@ void apic_restart_timer(uint32_t tmict_value) {
 EXPORT_SYMBOL(apic_restart_timer);
 
 
-void my_idt_install_handler(void) {
-	install_kernel_irq_handler(&isr_wrapper,IRQ_NUMBER);
+void my_idt_install_handler(sev_step_config_t *config) {
+	install_kernel_irq_handler(config, &isr_wrapper,IRQ_NUMBER);
 }
 EXPORT_SYMBOL(my_idt_install_handler);
 
-void my_idt_start_apic_timer(struct vcpu_svm *svm) {
+void my_idt_start_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) {
 	get_cpu();
 	/*waitingFOrTimer == true means that the interrupt from the previous
 	timmer programming has not yet been processed
 	*/
 
-	if( !sev_step_config.waitingForTimer && sev_step_config.active) {
+	if( !config->waitingForTimer && config->active) {
 		//it's assumed that the old timer config has been backed up
 		 apic_write(APIC_LVTT, IRQ_NUMBER | APIC_LVT_TIMER_ONESHOT);
    		 apic_write(APIC_TDCR, APIC_TDR_DIV_2);
 
 		//start apic_timer_irq
-		sev_step_config.waitingForTimer = true;
+		config->waitingForTimer = true;
 
 		__asm__("mfence");
-		calculate_steps(0);
-		apic_write(APIC_TMICT, sev_step_config.tmict_value); 
+		calculate_steps(config);
+		apic_write(APIC_TMICT, config->tmict_value); 
 	}
 	
 	put_cpu();
