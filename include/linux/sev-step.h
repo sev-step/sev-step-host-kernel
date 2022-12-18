@@ -18,6 +18,7 @@ typedef struct {
 	bool active;
 	uint32_t counted_instructions;
 	uint64_t rip;
+	struct kvm* main_vm;
 } sev_step_config_t;
 
 typedef struct {
@@ -55,7 +56,6 @@ typedef struct {
     uint32_t tmict_value;
 } sev_step_param_t;
 
-extern struct kvm* main_vm;
 extern sev_step_config_t sev_step_config;
 extern struct mutex sev_step_config_mutex;
 
