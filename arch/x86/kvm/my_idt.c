@@ -13,16 +13,9 @@
 
 #include <asm/tlbflush.h>
 
-#include "desc.h"
-#include "svm/svm.h"
 
-typedef struct {
-    gate_desc_t *base;
-    size_t     entries;
-} idt_t;
 
 idt_t idt;
-static bool idt_init = false;
 
 struct vcpu_svm* main_vcpu_svm = NULL;
 EXPORT_SYMBOL(main_vcpu_svm);
@@ -185,7 +178,7 @@ void my_idt_install_handler(void) {
 }
 EXPORT_SYMBOL(my_idt_install_handler);
 
-void start_apic_timer(struct vcpu_svm *svm) {
+void my_idt_start_apic_timer(struct vcpu_svm *svm) {
 	get_cpu();
 	/*waitingFOrTimer == true means that the interrupt from the previous
 	timmer programming has not yet been processed
@@ -207,4 +200,4 @@ void start_apic_timer(struct vcpu_svm *svm) {
 	put_cpu();
 
 }
-EXPORT_SYMBOL(start_apic_timer);
+EXPORT_SYMBOL(my_idt_start_apic_timer);

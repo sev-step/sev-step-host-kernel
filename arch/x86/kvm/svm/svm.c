@@ -3819,7 +3819,7 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		}
 		
 		//in this function we also start the cache priming
-		start_apic_timer(svm);
+		my_idt_start_apic_timer(svm);
 
 		//luca: assembly code in svm/vmenter.S
 		__svm_sev_es_vcpu_run(vmcb_pa);
