@@ -16,15 +16,15 @@ kvm-y			+= $(KVM)/kvm_main.o $(KVM)/coalesced_mmio.o \
 				$(KVM)/dirty_ring.o $(KVM)/binary_stats.o
 kvm-$(CONFIG_KVM_ASYNC_PF)	+= $(KVM)/async_pf.o
 
-$(obj)/raw_spinlock.o:
-	nasm -f elf64 -o $(obj)/raw_spinlock.o $(src)/raw_spinlock.asm
-	touch $(src)/.raw_spinlock.o.cmd
+$(obj)/sev-step/raw_spinlock.o:
+	nasm -f elf64 -o $(obj)/sev-step/raw_spinlock.o $(src)/sev-step/raw_spinlock.asm
+	touch $(src)/sev-step/.raw_spinlock.o.cmd
 	
 kvm-y			+= x86.o emulate.o i8259.o irq.o lapic.o \
 			   i8254.o ioapic.o irq_comm.o cpuid.o pmu.o mtrr.o \
 			   hyperv.o debugfs.o mmu/mmu.o mmu/page_track.o \
-			   mmu/spte.o userspace_page_track_api.o \
-			   raw_spinlock.o my_idt.o sev-step.o isr_wrapper.o
+			   mmu/spte.o sev-step/userspace_page_track_api.o \
+			   sev-step/raw_spinlock.o sev-step/my_idt.o sev-step/sev-step.o sev-step/isr_wrapper.o
 
 ifdef CONFIG_HYPERV
 kvm-y			+= kvm_onhyperv.o
