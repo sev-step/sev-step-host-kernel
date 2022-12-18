@@ -3826,7 +3826,7 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 
 
 		if(sev_step_config.active)
-			process_perfs(1);
+			calculate_steps(1);
 
 		if(sev_step_config.active) {
 			sev_step_event_t ss_event = {

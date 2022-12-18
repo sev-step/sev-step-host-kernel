@@ -193,7 +193,7 @@ void my_idt_start_apic_timer(struct vcpu_svm *svm) {
 		sev_step_config.waitingForTimer = true;
 
 		__asm__("mfence");
-		process_perfs(0);
+		calculate_steps(0);
 		apic_write(APIC_TMICT, sev_step_config.tmict_value); 
 	}
 	

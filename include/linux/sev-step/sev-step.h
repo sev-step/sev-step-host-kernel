@@ -27,6 +27,7 @@ typedef struct {
 	struct kvm* main_vm;
 	bool decrypt_rip;
 	bool waitingForTimer;
+	bool perf_init;
 
 	/* All values for old apic config, maybe new struct? TODO */
 	idt_t idt;
@@ -88,7 +89,7 @@ uint64_t perf_ctl_to_u64(perf_ctl_config_t * config);
 void write_ctl(perf_ctl_config_t * config, int cpu, uint64_t ctl_msr);
 void read_ctr(uint64_t ctr_msr, int cpu, uint64_t* result);
 void setup_perfs(void);
-void process_perfs(int mode);
+void calculate_steps(int mode);
 int my_sev_decrypt(struct kvm* kvm, void* dst_vaddr, void* src_vaddr, uint64_t dst_paddr, uint64_t src_paddr, uint64_t len, int* api_res);
 
 #endif

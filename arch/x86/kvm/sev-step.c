@@ -249,26 +249,25 @@ void setup_perfs() {
 }
 EXPORT_SYMBOL(setup_perfs);
 
-//process_perfs reads perfs.if called with "0", data is gathered. if called
+//reads perfs.if called with "0", data is gathered. if called
 //with "1" data is gathered on compared to previous data.
-void process_perfs(int mode) {
-    static int lastMode = 0;
+void calculate_steps(int mode) {
     if( perf_cpu != smp_processor_id() ) {
-        printk("read_perfs: called on cpu %d but setup_perfs was called on cpu %d\n", smp_processor_id(), perf_cpu);
+        printk("calculate_steps: called on cpu %d but setup_perfs was called on cpu %d\n", smp_processor_id(), perf_cpu);
     }
 
-    if( mode == 0) {
+    if(!sev_step_config.perf_init) {
         read_ctr(CTR_MSR_0, perf_cpu, &perf_reads[0][0]);        
-        lastMode = 0;
+        sev_step_config.perf_init = true;
     } else if ( mode == 1) {
-        if( lastMode == 1 ) {
-            printk("process_perfs(1) called with out previous call to procces_perfs(0)\n");
+        if(!sev_step_config.perf_init) {
+            printk("calculate_steps(1) called with out previous call to calculate_steps(0)\n");
         }
         read_ctr(CTR_MSR_0, perf_cpu, &perf_reads[0][1] );
         sev_step_config.counted_instructions = perf_reads[0][1] - perf_reads[0][0] -1;
-        lastMode = 1;
+        sev_step_config.perf_init = false;
     } else {
-        printk("read_perfs called with invalid mode arg\n");
+        printk("calculate_steps called with invalid mode arg\n");
     }
 }
-EXPORT_SYMBOL(process_perfs);
+EXPORT_SYMBOL(calculate_steps);
