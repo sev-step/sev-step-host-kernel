@@ -57,7 +57,7 @@
 #include "paging.h"
 
 // SEV-STEP
-#include <linux/userspace_page_track_api.h>
+#include <linux/sev-step/userspace_page_track_api.h>
 
 extern bool itlb_multihit_kvm_mitigation;
 

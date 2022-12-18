@@ -2,10 +2,10 @@
 #include <linux/uaccess.h>
 #include <linux/mm.h>
 #include <linux/vmalloc.h>
-#include <linux/userspace_page_track_api.h>
+#include <linux/sev-step/userspace_page_track_api.h>
 #include <linux/raw_spinlock.h>
 #include <asm/string.h>
-#include <linux/sev-step.h>
+#include <linux/sev-step/sev-step.h>
 
 usp_poll_api_ctx_t* ctx = NULL;
 EXPORT_SYMBOL(ctx);

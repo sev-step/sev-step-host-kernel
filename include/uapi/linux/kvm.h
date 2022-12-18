@@ -17,8 +17,8 @@
 //
 // SEV STEP
 //
-#include <linux/sev-step.h>
-#include <linux/userspace_page_track_api.h>
+#include <linux/sev-step/sev-step.h>
+#include <linux/sev-step/userspace_page_track_api.h>
 
 #define KVM_API_VERSION 12
 

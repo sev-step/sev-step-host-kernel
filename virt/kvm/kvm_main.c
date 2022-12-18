@@ -71,7 +71,7 @@
 //
 //	SEV STEP
 //
-#include <linux/sev-step.h>
+#include <linux/sev-step/sev-step.h>
 
 // Own spinlock implementation
 #include <linux/raw_spinlock.h>

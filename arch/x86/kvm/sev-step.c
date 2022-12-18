@@ -5,7 +5,7 @@
 #include <asm/svm.h> //struct vmcb_save_area
 #include <linux/psp-sev.h>
 
-#include <linux/sev-step.h>
+#include <linux/sev-step/sev-step.h>
 #include "svm/svm.h"
 
 DEFINE_MUTEX(sev_step_config_mutex);

@@ -7,7 +7,7 @@
 #include <linux/kvm_types.h>
 #include <asm/kvm_page_track.h>
 
-#include "sev-step-idt-gate-desc.h"
+#include "idt-gate-desc.h"
 
 //
 // SEV STEP Types

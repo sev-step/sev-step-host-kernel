@@ -9,7 +9,7 @@
 #include <asm/svm.h> //struct vmcb_save_area
 #include <asm-generic/set_memory.h>
 
-#include <linux/my_idt.h>
+#include <linux/sev-step/my_idt.h>
 
 #include <asm/tlbflush.h>
 

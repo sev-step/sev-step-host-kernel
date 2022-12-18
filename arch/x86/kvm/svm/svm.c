@@ -43,8 +43,8 @@
 #define __ex(x) __kvm_handle_fault_on_reboot(x)
 
 //SEV STEP
-#include <linux/my_idt.h>
-#include <linux/userspace_page_track_api.h>
+#include <linux/sev-step/my_idt.h>
+#include <linux/sev-step/userspace_page_track_api.h>
 
 #include "svm.h"
 #include "svm_ops.h"

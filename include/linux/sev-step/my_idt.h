@@ -1,6 +1,6 @@
 #ifndef MY_IDT_H
 #define MY_IDT_H
-#include <linux/sev-step.h>
+#include <linux/sev-step/sev-step.h>
 #include "svm/svm.h"
 
 void setup_apic_timer(uint32_t tmict_value);
