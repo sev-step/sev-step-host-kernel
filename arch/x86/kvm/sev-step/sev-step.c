@@ -52,9 +52,18 @@ uint64_t perf_ctl_to_u64(perf_ctl_config_t * config) {
 }
 
 /* Need to be done this way, if moved to sev-step.h there are many building errors */
-// Better solution? TODO
 //uint64_t sev_step_get_rip(struct vcpu_svm* svm); prototyp is in svm.c
 
+/**
+ * @brief Tell sev to decrypt the data for debug purposes
+ * 
+ * @param kvm kvm struct to get the info from
+ * @param src source address for the data
+ * @param dst destination address for the data
+ * @param size size of the data
+ * @param error error code
+ * @return int result from the execution of the command
+ */
 static int __my_sev_issue_dbg_cmd(struct kvm *kvm, unsigned long src,
 			       unsigned long dst, int size,
 			       int *error)
@@ -111,6 +120,13 @@ int my_sev_decrypt(struct kvm* kvm, void* dst_vaddr, void* src_vaddr, uint64_t d
 }
 EXPORT_SYMBOL(my_sev_decrypt);
 
+/**
+ * @brief Decrypt the vmcb_save_area
+ * 
+ * @param svm svm for getting the vmsa and vmcb
+ * @param save_area the save area
+ * @return int 0 on success
+ */
 int decrypt_vmsa(struct vcpu_svm* svm, struct vmcb_save_area* save_area) {
 
 	uint64_t src_paddr, dst_paddr;
@@ -169,8 +185,11 @@ int decrypt_vmsa(struct vcpu_svm* svm, struct vmcb_save_area* save_area) {
 
 }
 
-/*
- * Contains a switch to work  SEV and SEV-ES
+/**
+ * @brief Decrypt the rip of sev
+ * 
+ * @param svm svm for getting the info
+ * @return uint64_t the decrypted rip
  */
 uint64_t sev_step_get_rip(struct vcpu_svm* svm) {
 	struct vmcb_save_area* save_area;
@@ -183,6 +202,7 @@ uint64_t sev_step_get_rip(struct vcpu_svm* svm) {
 	sev = &to_kvm_svm(kvm)->sev_info;
 
 	//for sev-es we need to use the debug api, to decrypt the vmsa
+	//switch to work  SEV and SEV-ES
 	if( sev->active && sev->es_active) {
 		int res;
 		save_area = vmalloc(sizeof(struct vmcb_save_area) );

@@ -10,7 +10,7 @@
 usp_poll_api_ctx_t* ctx = NULL;
 EXPORT_SYMBOL(ctx);
 
-int get_size_for_event(usp_event_type_t event_type, uint64_t* size) {
+int get_size_for_event(usp_event_type_t event_type, uint64_t *size) {
     switch (event_type)
     {
         case PAGE_FAULT_EVENT:

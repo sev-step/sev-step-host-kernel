@@ -2,24 +2,43 @@
 #define USERSPACE_PAGE_TRACK_API
 
 #include <linux/types.h>
-//
-// SEV-STEP Types
-//
 
+/* SEV-STEP API TYPES */
+
+/**
+ * @brief struct for storing tracking parameters 
+ * which are sent from userspace
+ */
 typedef struct {
+    //guest physical address of page
 	uint64_t gpa;
+    //one of the track modes defined in enum kvm_page_track_mode
 	int track_mode;
 } track_page_param_t;
 
+/**
+ * @brief struct for storing tracking parameters 
+ * for all pages which are sent from userspace
+ */
 typedef struct {
+    //one of the track modes defined in enum kvm_page_track_mode
 	int track_mode;
 } track_all_pages_t;
 
+/**
+ * @brief enum for supported event types
+ */
 typedef enum {
+    //used for page fault events
     PAGE_FAULT_EVENT,
+    //used for single stepping events
     SEV_STEP_EVENT,
 } usp_event_type_t;
 
+/**
+ * @brief Stores the structure of the shared memory 
+ * region between kernelspace and userspace
+ */
 typedef struct {
     //lock for all of the other values in this struct
     int spinlock;
@@ -29,18 +48,32 @@ typedef struct {
     int event_acked;
     //type of the stored event. Required to do the correct raw mem cast
     usp_event_type_t event_type;
+    // buffer for the event
     uint8_t event_buffer[2048];
 } shared_mem_region_t;
 
+/**
+ * @brief struct for storing parameters which are
+ * needed for the initialization of the api
+ */
 typedef struct {
+    //process id
     int pid;
+    //the user defined shared memory address
     uint64_t user_vaddr_shared_mem;
 } usp_init_poll_api_t;
 
+/**
+ * @brief struct for storing the api context
+ */
 typedef struct {
+    //process id
     int pid;
+    //memory region which is shared by kernelspace and userspace
     shared_mem_region_t* shared_mem_region;
+    //next id
     uint64_t next_id;
+    //if true, the api will be forced to reset
     int force_reset;
     
     //just for internal use. Used to remember get_user_pages_unlocked
@@ -48,10 +81,16 @@ typedef struct {
     struct page* _page_for_shared_mem;
 } usp_poll_api_ctx_t;
 
+/**
+ * @brief struct for storing page fault parameters 
+ * which are sent to userspace
+ */
 typedef struct {
-    //uint64_t id; //filled automatically
+    // gpa of the page fault
     uint64_t faulted_gpa;
 } usp_page_fault_event_t;
+
+/* SEV-STEP API FUNCTIONS */
 
 /**
  * @brief Initializes a usp_poll_api_ctx_t which is required for all API calls. Assumes that the shared_mem_region
@@ -93,8 +132,20 @@ int usp_poll_close_api(usp_poll_api_ctx_t* ctx);
  */
 int usp_send_and_block(usp_poll_api_ctx_t* ctx, usp_event_type_t event_type, void* event);
 
-int get_size_for_event(usp_event_type_t event_type, uint64_t* size);
+/**
+ * @brief Determine the size of a supported event
+ * 
+ * @param event_type type of event
+ * @param size pointer to save the size
+ * @return int 0 on success
+ */
+int get_size_for_event(usp_event_type_t event_type, uint64_t *size);
 
+/**
+ * @brief Check if the usp_poll_api_ctx_t is initialized
+ * 
+ * @return int 1 if initialized
+ */
 int ctx_initialized(void);
 
 extern usp_poll_api_ctx_t* ctx;

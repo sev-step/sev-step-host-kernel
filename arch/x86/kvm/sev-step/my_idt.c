@@ -37,12 +37,23 @@ EXPORT_SYMBOL(waitingForTimer);
 
 extern void isr_wrapper(void);
 
+/**
+ * @brief Dumping a gate to dmesg log
+ * 
+ * @param gate the gate to dump
+ * @param idx vector
+ */
 static void dump_gate(gate_desc_t *gate, int idx)
 {
     printk("IDT[%3d] @%016llx = %016lx (seg sel 0x%x); p=%d; dpl=%d; type=%02d; ist=%d",
         idx, (unsigned long long) gate,  gate_offset(gate), gate->segment, gate->p, gate->dpl, gate->type, gate->ist);
 }
 
+/**
+ * @brief Get the current idt
+ * 
+ * @param idt struct for idt parameters
+ */
 static void get_idt( idt_t *idt ) {
 	dtr_t idtr = {0};
 	int entries;
@@ -59,6 +70,13 @@ static void get_idt( idt_t *idt ) {
 	idt->entries = entries;
 }
 
+/**
+ * @brief Install new irq handler
+ * 
+ * @param config global sev step config
+ * @param asm_handler custom handler from asm
+ * @param vector vector for handler
+ */
 void install_kernel_irq_handler(sev_step_config_t *config, void *asm_handler, int vector) {
 	gate_desc_t *gate;
 
@@ -85,6 +103,12 @@ void install_kernel_irq_handler(sev_step_config_t *config, void *asm_handler, in
     gate->ist = 0; // new stack for interrupt handling?
 }
 
+/**
+ * @brief Restore the old irq handler
+ * 
+ * @param config global sev step config
+ * @param vector vector for handler
+ */
 static void restore_kernel_irq_handler(sev_step_config_t *config, int vector) {
 	gate_desc_t *gate;
 
@@ -97,7 +121,7 @@ static void restore_kernel_irq_handler(sev_step_config_t *config, int vector) {
 	memcpy(gate,&config->old_idt_gate, sizeof(gate_desc_t));
 }
 
- 
+//this function is called from asm
 void my_handler(void) {
 	get_cpu();
 	apic_write(APIC_EOI, 0x0); //aknowledge interrupt
