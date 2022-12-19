@@ -4843,6 +4843,12 @@ static long kvm_dev_ioctl(struct file *filp,
 			// being send after api is closed
 			ctx = NULL;
 
+			// Resetting tracking
+			kvm_stop_tracking(global_sev_step_config.main_vm->vcpus[0],KVM_PAGE_TRACK_EXEC);
+			kvm_stop_tracking(global_sev_step_config.main_vm->vcpus[0],KVM_PAGE_TRACK_ACCESS);
+			kvm_stop_tracking(global_sev_step_config.main_vm->vcpus[0],KVM_PAGE_TRACK_WRITE);
+
+
 			printk("KVM_USP_CLOSE_POLL_API: success\n");
 			r = 0;
 	} break;

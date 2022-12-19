@@ -5,6 +5,8 @@
 #include <asm/svm.h> //struct vmcb_save_area
 #include <linux/psp-sev.h>
 
+#include "../mmu.h"
+
 #include <linux/sev-step/sev-step.h>
 #include "svm/svm.h"
 
@@ -427,4 +429,23 @@ long kvm_stop_tracking(struct kvm_vcpu *vcpu,enum kvm_page_track_mode mode ) {
 
         return count;
 }
-EXPORT_SYMBOL(kvm_stop_tracking); 
+EXPORT_SYMBOL(kvm_stop_tracking);
+
+bool __clear_nx_on_page(struct kvm_vcpu *vcpu, gfn_t gfn) {
+	int idx;
+	bool ret;
+	struct kvm_memory_slot *slot;
+
+	ret = false;
+	idx = srcu_read_lock(&vcpu->kvm->srcu);
+	slot = kvm_vcpu_gfn_to_memslot(vcpu, gfn);
+	if( slot != NULL ) {
+		spin_lock(&vcpu->kvm->mmu_lock);
+		kvm_mmu_slot_gfn_protect(vcpu->kvm,slot,gfn,KVM_PAGE_TRACK_RESET_EXEC);
+		spin_unlock(&vcpu->kvm->mmu_lock);
+		ret = true;
+	}
+	srcu_read_unlock(&vcpu->kvm->srcu, idx);
+	return ret;
+}
+EXPORT_SYMBOL(__clear_nx_on_page);

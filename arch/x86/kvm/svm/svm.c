@@ -3837,7 +3837,7 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 			//sent sev step event
 			if(usp_send_and_block(ctx, SEV_STEP_EVENT, (void *)&ss_event) == 1) {
 				if(!ctx->force_reset) // on forced reset -> no error
-					printk("usp_send_and_block: Failed in page fault handler\n");
+					printk("usp_send_and_block: Failed in svm_vcpu_run\n");
 			}
 		}
 

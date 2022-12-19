@@ -3904,6 +3904,9 @@ static bool page_fault_handle_page_track(struct kvm_vcpu *vcpu,
 		//otherwise no page fault event is sent to userspace
 		if(kvm_page_track_is_active(vcpu,gfn,modes[i]) && ctx_initialized()) {
 			__untrack_single_page(vcpu, gfn, modes[i]);
+			if(modes[i] == KVM_PAGE_TRACK_EXEC) {
+				__clear_nx_on_page(vcpu,gfn);
+			}
 			was_tracked = true;
 		}
 	}

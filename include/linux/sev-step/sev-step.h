@@ -198,4 +198,13 @@ void calculate_steps(sev_step_config_t *config);
  */
 int my_sev_decrypt(struct kvm* kvm, void* dst_vaddr, void* src_vaddr, uint64_t dst_paddr, uint64_t src_paddr, uint64_t len, int* api_res);
 
+/**
+ * @brief Clear the no-execute bit
+ * 
+ * @param vcpu vcpu of kvm
+ * @param gfn guest page number
+ * @return true on success
+ */
+bool __clear_nx_on_page(struct kvm_vcpu *vcpu, gfn_t gfn);
+
 #endif
