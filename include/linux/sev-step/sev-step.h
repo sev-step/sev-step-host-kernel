@@ -185,20 +185,6 @@ void setup_perfs(void);
 void calculate_steps(sev_step_config_t *config);
 
 /**
- * @brief Perform the decryption of sev data for debug purposes
- * 
- * @param kvm kvm struct to get the info from
- * @param dst_vaddr destination virtual address for the data
- * @param src_vaddr source virtual address for the data
- * @param dst_paddr destination physical address for the data
- * @param src_paddr source physical address for the data
- * @param len length of the data
- * @param api_res the api result
- * @return int the result of the sev command
- */
-int my_sev_decrypt(struct kvm* kvm, void* dst_vaddr, void* src_vaddr, uint64_t dst_paddr, uint64_t src_paddr, uint64_t len, int* api_res);
-
-/**
  * @brief Clear the no-execute bit
  * 
  * @param vcpu vcpu of kvm

@@ -146,33 +146,6 @@ void apic_restore(sev_step_config_t *config) {
 }
 EXPORT_SYMBOL(apic_restore);
 
-void setup_apic_timer(sev_step_config_t *config, uint32_t tmict_value) {
-	 get_cpu(); //disable preemption => cannot be moved to antoher cpu
-	 printk("setup_apic is running on: %d\n", smp_processor_id());
-	 //start apic_timer_oneshot
-	config->old_apic_lvtt = apic_read(APIC_LVTT);
-    config->old_apic_tdcr = apic_read(APIC_TDCR);
-	config->old_apic_tmict = apic_read(APIC_TMICT);
-	printk("in setup: old_apic_lvtt = 0x%x, old_apic_tdcr = 0x%x, old_apic_tmict = 0x%x",
-		config->old_apic_lvtt, config->old_apic_tdcr, config->old_apic_tmict);
-	 
-    apic_write(APIC_LVTT, IRQ_NUMBER | APIC_LVT_TIMER_ONESHOT);
-    apic_write(APIC_TDCR, APIC_TDR_DIV_2);
-	// printk("APIC timer one-shot mode with division 2 (lvtt=%x/tdcr=%x)\n",
-   //     apic_read(APIC_LVTT), apic_read(APIC_TDCR));
-
-    // NOTE: APIC seems not to handle divide by 1 properly (?)
-    // see also: http://wiki.osdev.org/APIC_timer)
-	 
-	 //start apic_timer_irq
-	 config->waitingForTimer = true;
-	 apic_write(APIC_TMICT, tmict_value); 
-	//printk("setup_apic done at %llu\n", ktime_get_ns());
-	 put_cpu(); //enable preemption
-
-}
-EXPORT_SYMBOL(setup_apic_timer);
-
 void apic_backup(sev_step_config_t *config) {
  	get_cpu(); //disable preemption => cannot be moved to antoher cpu
 	printk("apic_backup is running on: %d\n", smp_processor_id());
@@ -183,19 +156,6 @@ void apic_backup(sev_step_config_t *config) {
 	put_cpu();
 }
 EXPORT_SYMBOL(apic_backup);
-
-void apic_restart_timer(sev_step_config_t *config, uint32_t tmict_value) {
-	get_cpu();	
-	printk("apic_restart_timer is running on: %d\n", smp_processor_id());
-    apic_write(APIC_LVTT, IRQ_NUMBER | APIC_LVT_TIMER_ONESHOT);
-    apic_write(APIC_TDCR, APIC_TDR_DIV_2);
-	config->waitingForTimer = true;
-	apic_write(APIC_TMICT, tmict_value); 
-	//printk("apic_restart_timer done at %llu\n", ktime_get_ns());
-	put_cpu();
-}
-EXPORT_SYMBOL(apic_restart_timer);
-
 
 void my_idt_install_handler(sev_step_config_t *config) {
 	install_kernel_irq_handler(config, &isr_wrapper,IRQ_NUMBER);

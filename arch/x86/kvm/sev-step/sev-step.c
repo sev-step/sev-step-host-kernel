@@ -91,37 +91,6 @@ static int __my_sev_issue_dbg_cmd(struct kvm *kvm, unsigned long src,
 	return ret;
 }
 
-int my_sev_decrypt(struct kvm* kvm, void* dst_vaddr, void* src_vaddr, uint64_t dst_paddr, uint64_t src_paddr, uint64_t len, int* api_res) {
-
-	int call_res;
-	call_res  = 0x1337;
-	*api_res = 0x1337;
-
-
-	if( dst_paddr % PAGE_SIZE != 0 || src_paddr % PAGE_SIZE != 0) {
-		printk("decrypt: for now, src_paddr, and dst_paddr must be page aligned");
-		return -1;
-	}
-
-	if( len > PAGE_SIZE ) {
-		printk("decrypt: for now, can be at most 4096 byte");
-		return -1;
-	}
-
-	memset(dst_vaddr,0,PAGE_SIZE);
-
-	//clflush_cache_range(src_vaddr, PAGE_SIZE);
-	//clflush_cache_range(dst_vaddr, PAGE_SIZE);
-	wbinvd_on_all_cpus();
-
-	call_res = __my_sev_issue_dbg_cmd(kvm, __sme_set(src_paddr), 
-		__sme_set(dst_paddr), len, api_res);
-
-	return call_res;
-
-}
-EXPORT_SYMBOL(my_sev_decrypt);
-
 /**
  * @brief Decrypt the vmcb_save_area
  * 
@@ -271,8 +240,6 @@ void setup_perfs() {
 }
 EXPORT_SYMBOL(setup_perfs);
 
-//reads perfs.if called with "0", data is gathered. if called
-//with "1" data is gathered on compared to previous data.
 void calculate_steps(sev_step_config_t *config) {
     if( perf_cpu != smp_processor_id() ) {
         printk("calculate_steps: called on cpu %d but setup_perfs was called on cpu %d\n", smp_processor_id(), perf_cpu);

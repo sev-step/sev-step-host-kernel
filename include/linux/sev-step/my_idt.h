@@ -4,14 +4,6 @@
 #include "svm/svm.h"
 
 /**
- * @brief Setup the apic timer for single stepping
- * 
- * @param config globaL sev step config
- * @param tmict_value apic timer value
- */
-void setup_apic_timer(sev_step_config_t *config, uint32_t tmict_value);
-
-/**
  * @brief Install the new handler on cpu
  * 
  * @param cpu cpu id
@@ -24,14 +16,6 @@ void install_handler_on_cpu(int cpu);
  * @param config global sev step config 
  */
 void apic_restore(sev_step_config_t *config);
-
-/**
- * @brief Restart the apic timer
- * 
- * @param config global sev step config
- * @param tmict_value apic timer value
- */
-void apic_restart_timer(sev_step_config_t *config, uint32_t tmict_value);
 
 /**
  * @brief Backup the current apic config
