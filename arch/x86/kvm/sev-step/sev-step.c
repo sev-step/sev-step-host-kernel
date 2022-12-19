@@ -6,6 +6,7 @@
 #include <linux/psp-sev.h>
 
 #include "../mmu.h"
+#include "mmu/mmu_internal.h"
 
 #include <linux/sev-step/sev-step.h>
 #include "svm/svm.h"
@@ -407,9 +408,9 @@ bool __clear_nx_on_page(struct kvm_vcpu *vcpu, gfn_t gfn) {
 	idx = srcu_read_lock(&vcpu->kvm->srcu);
 	slot = kvm_vcpu_gfn_to_memslot(vcpu, gfn);
 	if( slot != NULL ) {
-		spin_lock(&vcpu->kvm->mmu_lock);
-		kvm_mmu_slot_gfn_protect(vcpu->kvm,slot,gfn,KVM_PAGE_TRACK_RESET_EXEC);
-		spin_unlock(&vcpu->kvm->mmu_lock);
+		write_lock(&vcpu->kvm->mmu_lock);
+		kvm_mmu_slot_gfn_protect(vcpu->kvm,slot,gfn,PG_LEVEL_4K,KVM_PAGE_TRACK_RESET_EXEC);
+		write_unlock(&vcpu->kvm->mmu_lock);
 		ret = true;
 	}
 	srcu_read_unlock(&vcpu->kvm->srcu, idx);
