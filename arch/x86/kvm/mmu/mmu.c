@@ -1463,7 +1463,7 @@ bool kvm_mmu_slot_gfn_protect(struct kvm *kvm,
 	int i;
 	bool protected = false;
 
-	if (kvm_memslots_have_rmaps(kvm)) {
+	if (kvm_memslots_have_rmaps(kvm)) { //TODO: potential error, orig kernel did not have this check
 		for (i = min_level; i <= KVM_MAX_HUGEPAGE_LEVEL; ++i) {
 			rmap_head = gfn_to_rmap(gfn, i, slot);
 			protected |= __rmap_protect(kvm, rmap_head, true, mode);
@@ -1485,7 +1485,7 @@ static bool rmap_protect(struct kvm_vcpu *vcpu, u64 gfn,
 	struct kvm_memory_slot *slot;
 
 	slot = kvm_vcpu_gfn_to_memslot(vcpu, gfn);
-	return kvm_mmu_slot_gfn_protect(vcpu->kvm, slot, gfn,PG_LEVEL_4K,KVM_PAGE_TRACK_WRITE);
+	return kvm_mmu_slot_gfn_protect(vcpu->kvm, slot, gfn,PG_LEVEL_4K,mode);
 }
 
 static bool kvm_zap_rmapp(struct kvm *kvm, struct kvm_rmap_head *rmap_head,
