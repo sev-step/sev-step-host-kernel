@@ -3830,14 +3830,24 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 
 
 		if(global_sev_step_config.active) {
+			int send_ret = 0;
 			sev_step_event_t ss_event = {
 				.counted_instructions = global_sev_step_config.counted_instructions,
 				.sev_rip = global_sev_step_config.rip, 
 			};
+			send_ret = usp_send_and_block(uspt_ctx, SEV_STEP_EVENT, (void *)&ss_event);
 			//sent sev step event
-			if(usp_send_and_block(ctx, SEV_STEP_EVENT, (void *)&ss_event) == 1) {
-				if(!ctx->force_reset) // on forced reset -> no error
-					printk("usp_send_and_block: Failed in svm_vcpu_run\n");
+			switch (send_ret)
+			{
+			case 2:
+				printk("usp_send_and_block aborted due to force_reset\n");
+				break;
+			case 0:
+				//no error
+				break;
+			default:
+				printk("usp_send_and_block: Failed in svm_vcpu_run with %d",send_ret);
+				break;
 			}
 		}
 

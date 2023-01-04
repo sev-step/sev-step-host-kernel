@@ -3912,16 +3912,25 @@ static bool page_fault_handle_page_track(struct kvm_vcpu *vcpu,
 	}
 	
 	if(was_tracked) {
+		int send_ret = 0;
 		usp_page_fault_event_t pf_event = {
 			//.id = ,
 			.faulted_gpa = (uint64_t)(gfn << PAGE_SHIFT)
 		};
-
-		//sent page fault event
-		if(usp_send_and_block(ctx, PAGE_FAULT_EVENT, (void *)&pf_event) == 1) {
-			if(!ctx->force_reset) // on forced reset -> no error
-				printk("usp_send_and_block: Failed in page fault handler\n");
-		}
+		send_ret = usp_send_and_block(uspt_ctx, PAGE_FAULT_EVENT, (void *)&pf_event);
+			//sent sev step event
+			switch (send_ret)
+			{
+			case 2:
+				printk("usp_send_and_block aborted due to force_reset\n");
+				break;
+			case 0:
+				//no error
+				break;
+			default:
+				printk("usp_send_and_block: Failed in svm_vcpu_run with %d",send_ret);
+				break;
+			}
 	}
 	
 	if (unlikely(error_code & PFERR_RSVD_MASK))

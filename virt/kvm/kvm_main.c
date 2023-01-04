@@ -4815,9 +4815,9 @@ static long kvm_dev_ioctl(struct file *filp,
 				return -EFAULT;
 			}
 
-			ctx = kmalloc(sizeof(usp_poll_api_ctx_t),GFP_KERNEL);
+			uspt_ctx = kmalloc(sizeof(usp_poll_api_ctx_t),GFP_KERNEL);
 			
-			if( usp_poll_init_user_vaddr(param.pid,param.user_vaddr_shared_mem,ctx) ) {
+			if( usp_poll_init_user_vaddr(param.pid,param.user_vaddr_shared_mem,uspt_ctx) ) {
 				printk("KVM_USP_INIT_POLL_API: failed to init api ctx\n");
 				return -EINVAL;
 			}
@@ -4827,21 +4827,21 @@ static long kvm_dev_ioctl(struct file *filp,
 	} break;
 	case KVM_USP_CLOSE_POLL_API: {
 		printk("KVM_USP_CLOSE_POLL_API: got called\n");
-			if( ctx == NULL ) {
+			if( uspt_ctx == NULL ) {
 				printk("KVM_USP_CLOSE_POLL_API: ctx already null");
 				return -EINVAL;
 			}
 
-			if( usp_poll_close_api(ctx) ) {
+			if( usp_poll_close_api(uspt_ctx) ) {
 				printk("KVM_USP_CLOSE_POLL_API: failed to close ctx\n");
 				return -EINVAL;
 			}
 			
-			kfree(ctx);
+			kfree(uspt_ctx);
 
 			// set to null to prevent page fault events 
 			// being send after api is closed
-			ctx = NULL;
+			uspt_ctx = NULL;
 
 			// Resetting tracking
 			kvm_stop_tracking(global_sev_step_config.main_vm->vcpus[0],KVM_PAGE_TRACK_EXEC);

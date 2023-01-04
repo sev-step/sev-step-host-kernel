@@ -7,8 +7,8 @@
 #include <asm/string.h>
 #include <linux/sev-step/sev-step.h>
 
-usp_poll_api_ctx_t* ctx = NULL;
-EXPORT_SYMBOL(ctx);
+usp_poll_api_ctx_t* uspt_ctx = NULL;
+EXPORT_SYMBOL(uspt_ctx);
 
 int get_size_for_event(usp_event_type_t event_type, uint64_t *size) {
     switch (event_type)
@@ -24,6 +24,17 @@ int get_size_for_event(usp_event_type_t event_type, uint64_t *size) {
     }
 }
 
+/**
+ * @brief 
+ * 
+ * @param ctx 
+ * @param event_type 
+ * @param event 
+ * @return int 
+ *  - 1 : general error
+ *  - 0 : success
+ *  - 2 : force reset
+ */
 int usp_send_and_block(usp_poll_api_ctx_t* ctx, usp_event_type_t event_type, void* event) {
     uint64_t event_size = 0;
 
@@ -52,7 +63,7 @@ we also reset have_event
         if( ctx->force_reset ) {
             printk("usp_send_and_block: abort wait for send due to force_reset=1\n");
             raw_spinlock_unlock(&ctx->shared_mem_region->spinlock);
-            return 1;
+            return 2; //TODO: introcude proper error constants
 
         }
         raw_spinlock_unlock(&ctx->shared_mem_region->spinlock);
@@ -147,5 +158,5 @@ int usp_poll_close_api(usp_poll_api_ctx_t* ctx) {
 }
 
 int ctx_initialized() {
-    return ctx != NULL;
+    return uspt_ctx != NULL;
 }

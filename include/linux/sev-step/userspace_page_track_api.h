@@ -148,5 +148,5 @@ int get_size_for_event(usp_event_type_t event_type, uint64_t *size);
  */
 int ctx_initialized(void);
 
-extern usp_poll_api_ctx_t* ctx;
+extern usp_poll_api_ctx_t* uspt_ctx;
 #endif
