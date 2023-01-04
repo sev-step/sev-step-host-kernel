@@ -12,7 +12,7 @@ cp "/boot/System.map-$(uname -r)" arch/x86/kvm/
 touch .scmversion &&
 make -j $cores modules M=arch/x86/kvm/ LOCALVERSION= &&
 echo "You might be asked for sudo rights, to install the kernel module"
-sudo make modules_install M=arch/x86/kvm/ LOCALVERSION= &&
+sudo make modules_install M=arch/x86/kvm/ LOCALVERSION= || exit 1
 
 echo "Unload old modules" 
 sudo modprobe -r kvm_amd || exit 1
