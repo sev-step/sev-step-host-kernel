@@ -169,6 +169,7 @@ void my_idt_start_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) {
 	*/
 
 	if( !config->waitingForTimer && config->active) {
+		calculate_steps(config);
 		//it's assumed that the old timer config has been backed up
 		 apic_write(APIC_LVTT, IRQ_NUMBER | APIC_LVT_TIMER_ONESHOT);
    		 apic_write(APIC_TDCR, APIC_TDR_DIV_2);
@@ -177,7 +178,6 @@ void my_idt_start_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) {
 		config->waitingForTimer = true;
 
 		__asm__("mfence");
-		calculate_steps(config);
 		apic_write(APIC_TMICT, config->tmict_value); 
 	}
 	
