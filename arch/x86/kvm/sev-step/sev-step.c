@@ -15,9 +15,9 @@ DEFINE_MUTEX(sev_step_config_mutex);
 EXPORT_SYMBOL(sev_step_config_mutex);
 
 sev_step_config_t global_sev_step_config = {
+	.tmict_value = 0,
     .need_disable = false,
     .need_init = false,
-    .tmict_value = 0,
     .active = false,
     .counted_instructions = 0,
     .rip = 0,
@@ -25,9 +25,14 @@ sev_step_config_t global_sev_step_config = {
     .decrypt_rip = false,
     .waitingForTimer = false,
     .idt_init = false,
+	.perf_init = false,
+	.entry_counter = 0,
+
+	.idt = {0},
     .old_apic_lvtt = 0,
     .old_apic_tdcr = 0,
     .old_apic_tmict = 0,
+	.old_idt_gate = {0},
 };
 EXPORT_SYMBOL(global_sev_step_config);
 

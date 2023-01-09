@@ -58,6 +58,8 @@ typedef struct {
 	bool waitingForTimer;
 	// if true, the performance counter is initialized
 	bool perf_init;
+	//TODO: testing to periodically send apic interrupts
+	uint64_t entry_counter;
 
 	/* All values for storing old apic config */
 	idt_t idt;

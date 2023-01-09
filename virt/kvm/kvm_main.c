@@ -1199,10 +1199,12 @@ static void kvm_destroy_vm(struct kvm *kvm)
 	hardware_disable_all();
 	mmdrop(mm);
 
+	mutex_lock(&sev_step_config_mutex);
 	if( global_sev_step_config.main_vm == kvm ) {
 		printk("Detected shutdown of tracked VM\n");
 		global_sev_step_config.main_vm = NULL;
 	}
+	mutex_unlock(&sev_step_config_mutex);
 }
 
 void kvm_get_kvm(struct kvm *kvm)
@@ -4657,8 +4659,11 @@ static int kvm_dev_ioctl_create_vm(unsigned long type)
 
 	fd_install(r, file);
 
-	printk("setting main_vm to newly started vm\n");
+	mutex_lock(&sev_step_config_mutex);
 	global_sev_step_config.main_vm = kvm;
+	mutex_unlock(&sev_step_config_mutex);
+	printk("setting main_vm to newly started vm\n");
+
 
 	return r;
 
@@ -4810,10 +4815,13 @@ static long kvm_dev_ioctl(struct file *filp,
 				return -EINVAL;
 			}
 
+			mutex_lock(&sev_step_config_mutex);
 			if( global_sev_step_config.main_vm == NULL ) {
+				mutex_unlock(&sev_step_config_mutex);
 				printk("KVM_USP_INIT_POLL_API: main_vm is not initialized, aborting!\n");
 				return -EFAULT;
 			}
+			mutex_unlock(&sev_step_config_mutex);
 
 			uspt_ctx = kmalloc(sizeof(usp_poll_api_ctx_t),GFP_KERNEL);
 			
@@ -4844,9 +4852,11 @@ static long kvm_dev_ioctl(struct file *filp,
 			uspt_ctx = NULL;
 
 			// Resetting tracking
+			mutex_lock(&sev_step_config_mutex);
 			kvm_stop_tracking(global_sev_step_config.main_vm->vcpus[0],KVM_PAGE_TRACK_EXEC);
 			kvm_stop_tracking(global_sev_step_config.main_vm->vcpus[0],KVM_PAGE_TRACK_ACCESS);
 			kvm_stop_tracking(global_sev_step_config.main_vm->vcpus[0],KVM_PAGE_TRACK_WRITE);
+			mutex_unlock(&sev_step_config_mutex);
 
 
 			printk("KVM_USP_CLOSE_POLL_API: success\n");
@@ -4862,15 +4872,19 @@ static long kvm_dev_ioctl(struct file *filp,
 		}
 
 		//init config
+		mutex_lock(&sev_step_config_mutex);
 		global_sev_step_config.tmict_value = param.tmict_value;
 		global_sev_step_config.need_init = true;
+		mutex_unlock(&sev_step_config_mutex);
 
 		printk("KVM_SEV_STEP_ENABLE: success\n");
 		r = 0;
 	} break;
 	case KVM_SEV_STEP_DISABLE: {
 		printk("KVM_SEV_STEP_DISABLE: got called\n");
+		mutex_lock(&sev_step_config_mutex);
 		global_sev_step_config.need_disable = true;
+		mutex_unlock(&sev_step_config_mutex);
 
 		printk("KVM_SEV_STEP_DISABLE: success\n");
 		r = 0;
