@@ -10,7 +10,7 @@ cp /usr/src/linux-headers-`uname -r`/Module.symvers Module.symvers  &&
 cp "/boot/System.map-$(uname -r)" . 
 cp "/boot/System.map-$(uname -r)" arch/x86/kvm/
 touch .scmversion &&
-make -j $cores modules M=arch/x86/kvm/ LOCALVERSION= &&
+make -j $cores modules M=arch/x86/kvm/ LOCALVERSION= || exit 1
 echo "You might be asked for sudo rights, to install the kernel module"
 sudo make modules_install M=arch/x86/kvm/ LOCALVERSION= || exit 1
 
