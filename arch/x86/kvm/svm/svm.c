@@ -3805,8 +3805,11 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 	unsigned long vmcb_pa = svm->current_vmcb->pa;
 	//TODO: just for debug printing
 	bool just_disblabled_stepping = false;
-
+	unsigned long flags;
 	
+	//save current interrupt state (which also disables them)
+	local_irq_save(flags);
+	//enable interrutps
 	local_irq_enable();
 
 	mutex_lock(&sev_step_config_mutex);
@@ -3875,11 +3878,17 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 			printk("just_disblabled_stepping = true, about to vmenter\n");
 		}
 		mutex_unlock(&sev_step_config_mutex);
-		//kvm_guest_enter_irqoff();
-		local_irq_disable();
-		my_idt_start_apic_timer(&global_sev_step_config, svm);
+		
+		//now that we are done with our code,
+		// restore interrupt state that we saved earlier when
+		//entering the function
+		local_irq_restore(flags);
 
 	
+
+		my_idt_start_apic_timer(&global_sev_step_config, svm);
+
+		kvm_guest_enter_irqoff();
 		//luca: assembly code in svm/vmenter.S
 		__svm_sev_es_vcpu_run(vmcb_pa);
 		kvm_guest_exit_irqoff();
