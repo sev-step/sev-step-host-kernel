@@ -3810,7 +3810,7 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 	local_irq_enable();
 
 	mutex_lock(&sev_step_config_mutex);
-	if(global_sev_step_config.need_init) {
+	if(global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_DISABLED_WANT_INIT ) {
 		setup_perfs();
 		printk("svm_vcpu_run: prepared PERF");
 		my_idt_install_handler(&global_sev_step_config);
@@ -3818,10 +3818,9 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		printk("svm_vcpu_run: Backup apic timer\n");
 		apic_backup(&global_sev_step_config);
 
-		global_sev_step_config.need_init = false;
-		global_sev_step_config.active = true;
+		global_sev_step_config.single_stepping_status = SEV_STEP_STEPPING_STATUS_ENABLED;
 		
-	} else if (global_sev_step_config.need_disable) {
+	} else if (global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE) {
 		printk("svm_vcpu_run: Restoring old apic timer values\n");
 		apic_restore(&global_sev_step_config);
 
@@ -3834,8 +3833,7 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		svm_set_irq(&(svm->vcpu));
 		*/
 
-		global_sev_step_config.need_disable = false;
-		global_sev_step_config.active = false;
+		global_sev_step_config.single_stepping_status = SEV_STEP_STEPPING_STATUS_DISABLED;
 		global_sev_step_config.entry_counter = 0;
 
 		//TODO: just debug
@@ -3848,7 +3846,7 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 	if (sev_es_guest(vcpu->kvm)) {
 
 		mutex_lock(&sev_step_config_mutex);
-		if(global_sev_step_config.active) {
+		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
 			global_sev_step_config.entry_counter += 1;
 			/*if( global_sev_step_config.entry_counter % 100 == 0) {
 				printk("svm_vcpu_run: sending *periodic* fake intr to vm to kick apic timer again\n");
@@ -3871,7 +3869,7 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		}
 		
 		//in this function we also start the cache priming and read the performance counters
-		if(global_sev_step_config.active) {
+		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
 			printk("setting timer then vmenter\n");
 		} else if (just_disblabled_stepping){
 			printk("just_disblabled_stepping = true, about to vmenter\n");
@@ -3887,7 +3885,7 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		kvm_guest_exit_irqoff();
 
 		mutex_lock(&sev_step_config_mutex);
-		if(global_sev_step_config.active) {
+		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
 			printk("global_sev_step_config.active = true vmexit\n");
 			calculate_steps(&global_sev_step_config);
 		}  else if (just_disblabled_stepping){
@@ -3896,14 +3894,14 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		mutex_unlock(&sev_step_config_mutex);
 
 		mutex_lock(&sev_step_config_mutex);
-		if(global_sev_step_config.active) {
+		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
 			int send_ret = 0;
 			sev_step_event_t ss_event = {
 				.counted_instructions = global_sev_step_config.counted_instructions,
 				.sev_rip = global_sev_step_config.rip, 
 			};
 
-			if( global_sev_step_config.need_disable ) {
+			if( global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE ) {
 				printk("ignoring single step event, as user already requestd signle step disable\n");
 				mutex_unlock(&sev_step_config_mutex);
 			} else {

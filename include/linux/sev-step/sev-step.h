@@ -34,18 +34,29 @@ typedef struct {
 } idt_t;
 
 /**
+ * @brief Describes the current state of the signle stepping "engine"
+ * 
+ */
+typedef enum  {
+	///@brief Not running
+	SEV_STEP_STEPPING_STATUS_DISABLED,
+	///@brief User requested to enable, still pending untill next vmenter
+	SEV_STEP_STEPPING_STATUS_DISABLED_WANT_INIT,
+	///@brief Running
+	SEV_STEP_STEPPING_STATUS_ENABLED,
+	/// @brief User requested to disable, still pending until next vmenter
+	SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE,
+} sev_step_stepping_status_t;
+
+/**
  * @brief global struct holding all parameters needed for single
  * stepping with SEV-STEP
  */
 typedef struct {
 	// value for the apic timer
     uint32_t tmict_value;
-	// if true, single stepping will be stopped
-	bool need_disable;
-	// if true, single stepping will be initialized
-	bool need_init;
-	// if true, single stepping is active
-	bool active;
+	/// @brief Status of single steppign engine. See comments for enum type
+	sev_step_stepping_status_t single_stepping_status;
 	// stores the number of steps executed in the vm
 	uint32_t counted_instructions;
 	// stores the decrypted rip address
@@ -194,5 +205,16 @@ void calculate_steps(sev_step_config_t *config);
  * @return true on success
  */
 bool __clear_nx_on_page(struct kvm_vcpu *vcpu, gfn_t gfn);
+
+
+/**
+ * @brief Helper function that return true for all sev_step_stepping_status_t states in which
+ * signle stepping is enabled
+ * 
+ * @param cfg global sev_step_config
+ * @return true if single stepping is enabled
+ * @return false if single stepping is disabled
+ */
+bool sev_step_is_single_stepping_active(sev_step_config_t* cfg);
 
 #endif

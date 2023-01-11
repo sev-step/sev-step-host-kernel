@@ -4874,7 +4874,25 @@ static long kvm_dev_ioctl(struct file *filp,
 		//init config
 		mutex_lock(&sev_step_config_mutex);
 		global_sev_step_config.tmict_value = param.tmict_value;
-		global_sev_step_config.need_init = true;
+		switch (global_sev_step_config.single_stepping_status) {
+			case SEV_STEP_STEPPING_STATUS_DISABLED:
+				global_sev_step_config.single_stepping_status = SEV_STEP_STEPPING_STATUS_DISABLED_WANT_INIT;
+				break;
+			case SEV_STEP_STEPPING_STATUS_DISABLED_WANT_INIT:
+				printk("KVM_SEV_STEP_ENABLE SEV_STEP_STEPPING_STATUS_DISABLED_WANT_INIT already pending\n");
+				break;
+			case SEV_STEP_STEPPING_STATUS_ENABLED:
+				printk("KVM_SEV_STEP_ENABLE already in SEV_STEP_STEPPING_STATUS_ENABLED state\n");
+				break;
+			case SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE:
+				global_sev_step_config.single_stepping_status = SEV_STEP_STEPPING_STATUS_ENABLED;
+				printk("KVM_SEV_STEP_ENABLE was in SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE, discarding and falling back to SEV_STEP_STEPPING_STATUS_ENABLED\n");
+				break;
+			default:
+				printk("KVM_SEV_STEP_ENABLE error, unknown enum value\n");
+				mutex_unlock(&sev_step_config_mutex);
+				return -EINVAL;
+		}
 		mutex_unlock(&sev_step_config_mutex);
 
 		printk("KVM_SEV_STEP_ENABLE: success\n");
@@ -4883,7 +4901,25 @@ static long kvm_dev_ioctl(struct file *filp,
 	case KVM_SEV_STEP_DISABLE: {
 		printk("KVM_SEV_STEP_DISABLE: got called\n");
 		mutex_lock(&sev_step_config_mutex);
-		global_sev_step_config.need_disable = true;
+		switch (global_sev_step_config.single_stepping_status) {
+			case SEV_STEP_STEPPING_STATUS_DISABLED:
+				printk("KVM_SEV_STEP_DISABLE already in SEV_STEP_STEPPING_STATUS_DISABLED state\n");
+				break;
+			case SEV_STEP_STEPPING_STATUS_DISABLED_WANT_INIT:
+				global_sev_step_config.single_stepping_status = SEV_STEP_STEPPING_STATUS_DISABLED;
+				printk("KVM_SEV_STEP_DISABLE was in SEV_STEP_STEPPING_STATUS_DISABLED_WANT_INIT, discarding and falling back to SEV_STEP_STEPPING_STATUS_DISABLED\n");
+				break;
+			case SEV_STEP_STEPPING_STATUS_ENABLED:
+				global_sev_step_config.single_stepping_status = SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE;
+				break;
+			case SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE:
+				printk("KVM_SEV_STEP_ENABLE SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE already pending\n");
+				break;
+			default:
+				printk("KVM_SEV_STEP_DISABLE error, unknown enum value\n");
+				mutex_unlock(&sev_step_config_mutex);
+				return -EINVAL;
+		}
 		mutex_unlock(&sev_step_config_mutex);
 
 		printk("KVM_SEV_STEP_DISABLE: success\n");

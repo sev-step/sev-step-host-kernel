@@ -10,6 +10,7 @@
 #include <asm-generic/set_memory.h>
 
 #include <linux/sev-step/my_idt.h>
+#include <linux/sev-step/sev-step.h>
 
 #include <asm/tlbflush.h>
 
@@ -170,7 +171,7 @@ void my_idt_start_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) {
 	timmer programming has not yet been processed
 	*/
 
-	if( !config->waitingForTimer && config->active) {
+	if( !config->waitingForTimer && sev_step_is_single_stepping_active(config) ) {
 		calculate_steps(config);
 		//it's assumed that the old timer config has been backed up
 		 apic_write(APIC_LVTT, IRQ_NUMBER | APIC_LVT_TIMER_ONESHOT);

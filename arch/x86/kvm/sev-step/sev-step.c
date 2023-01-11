@@ -16,9 +16,7 @@ EXPORT_SYMBOL(sev_step_config_mutex);
 
 sev_step_config_t global_sev_step_config = {
 	.tmict_value = 0,
-    .need_disable = false,
-    .need_init = false,
-    .active = false,
+	.single_stepping_status = SEV_STEP_STEPPING_STATUS_DISABLED,
     .counted_instructions = 0,
     .rip = 0,
     .main_vm = NULL,
@@ -35,6 +33,12 @@ sev_step_config_t global_sev_step_config = {
 	.old_idt_gate = {0},
 };
 EXPORT_SYMBOL(global_sev_step_config);
+
+bool sev_step_is_single_stepping_active(sev_step_config_t* cfg) {
+	return (cfg->single_stepping_status == SEV_STEP_STEPPING_STATUS_ENABLED) ||
+		(cfg->single_stepping_status == SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE);
+}
+EXPORT_SYMBOL(sev_step_is_single_stepping_active);
 
 //used to store performance counter values; 6 counters, 2 readings per counter
 uint64_t perf_reads[6][2];
