@@ -4780,11 +4780,14 @@ static long kvm_dev_ioctl(struct file *filp,
 
 		tracked_pages =
 			kvm_start_tracking(global_sev_step_config.main_vm->vcpus[0], param.track_mode);
+		printk("KVM_TRACK_ALL_PAGES: tracked %lu pages\n",tracked_pages);
+
 		r = 0;
 	} break;
 	case KVM_UNTRACK_ALL_PAGES: {
 		track_all_pages_t param;
 		long untrack_count;
+		printk("KVM_UNTRACK_ALL_PAGES: got called\n");
 		if (copy_from_user(&param, argp, sizeof(param))) {
 			printk("UNTRACK_ALL_PAGES: failed to copy args\n");
 			return -EINVAL;
@@ -4804,6 +4807,8 @@ static long kvm_dev_ioctl(struct file *filp,
 
 		untrack_count =
 			kvm_stop_tracking(global_sev_step_config.main_vm->vcpus[0], param.track_mode);
+		printk("KVM_UNTRACK_ALL_PAGES: untracked %lu pages\n",untrack_count);
+
 		r = 0;
 	} break;
 	case KVM_USP_INIT_POLL_API: {

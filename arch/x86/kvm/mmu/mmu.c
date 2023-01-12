@@ -56,6 +56,8 @@
 
 #include "paging.h"
 
+#include <linux/smp.h>
+
 // SEV-STEP
 #include <linux/sev-step/userspace_page_track_api.h>
 
@@ -1470,8 +1472,8 @@ bool kvm_mmu_slot_gfn_protect(struct kvm *kvm,
 		}
 	}
 
-	//luca: this was not in sev-es kernel. Not sure what it does
-
+	//luca: can be disabled via tdp_mmu kvm param. For future versions we should adapt our
+	//implementation to work with this path, as it is enabled by default
 	if (is_tdp_mmu_enabled(kvm))
 		protected |=
 			kvm_tdp_mmu_write_protect_gfn(kvm, slot, gfn, min_level);
@@ -3898,16 +3900,20 @@ static bool page_fault_handle_page_track(struct kvm_vcpu *vcpu,
 	/* Send page fault event to userspace */
 	int modes[] = {KVM_PAGE_TRACK_WRITE,KVM_PAGE_TRACK_ACCESS,KVM_PAGE_TRACK_EXEC};
 	bool was_tracked = false;
+	enum kvm_page_track_mode mode;
 	int i;
 	for(i = 0; i < sizeof(modes) / sizeof(modes[0]); i++ ) {
 		//check if page is tracked and if ctx is initialized
 		//otherwise no page fault event is sent to userspace
-		if(kvm_page_track_is_active(vcpu,gfn,modes[i]) && ctx_initialized()) {
+		if(kvm_page_track_is_active(vcpu,gfn,modes[i])) {
+			printk("page_fault_handle_page_track: found tracked page, running on core %d",smp_processor_id());
 			__untrack_single_page(vcpu, gfn, modes[i]);
+			//TODO: investigate if this is really required.
 			if(modes[i] == KVM_PAGE_TRACK_EXEC) {
 				__clear_nx_on_page(vcpu,gfn);
 			}
 			was_tracked = true;
+			mode = modes[i];
 		}
 	}
 	

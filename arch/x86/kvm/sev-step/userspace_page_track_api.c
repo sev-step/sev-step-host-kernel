@@ -37,6 +37,9 @@ int get_size_for_event(usp_event_type_t event_type, uint64_t *size) {
  */
 int usp_send_and_block(usp_poll_api_ctx_t* ctx, usp_event_type_t event_type, void* event) {
     uint64_t event_size = 0;
+    uint64_t abort_after = 0;
+    const uint64_t sec_to_nanosec = 100000000000ULL;
+
 
 /*
 Initial: have_event = 0, event_acked = 1
@@ -91,6 +94,39 @@ we also reset have_event
 
     raw_spinlock_unlock(&ctx->shared_mem_region->spinlock);
     printk("usp_send_and_block: unlocked and done\n");
+
+    //wait until we are allowed to send the next event
+    //wait for ack, but with tiemout. Otherwise small bugs in userland easily lead
+    //to a kernel hang
+    abort_after = ktime_get_ns() + 20ULL * sec_to_nanosec;
+    printk("usp_send_and_block: waiting with return untill user acked...\n");
+    while(1) {
+        raw_spinlock_lock(&ctx->shared_mem_region->spinlock);
+        if( ctx->shared_mem_region->event_acked ) {
+            raw_spinlock_unlock(&ctx->shared_mem_region->spinlock);
+            break;
+        }
+        if( ctx->force_reset ) {
+            printk("usp_send_and_block: abort wait for send due to force_reset=1\n");
+            raw_spinlock_unlock(&ctx->shared_mem_region->spinlock);
+            return 2; //TODO: introcude proper error constants
+        }
+
+
+        if( ktime_get_ns() > abort_after ) {
+            printk("Waiting for ack of event timed out, continuing\n");
+            raw_spinlock_unlock(&ctx->shared_mem_region->spinlock);
+            return 3;
+        }
+
+        raw_spinlock_unlock(&ctx->shared_mem_region->spinlock);
+
+       
+
+
+    }
+    printk("usp_send_and_block: user acked the event ");
+
     return 0;
 }
 EXPORT_SYMBOL(usp_send_and_block);

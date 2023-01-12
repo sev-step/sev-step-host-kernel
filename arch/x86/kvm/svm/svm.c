@@ -3142,6 +3142,58 @@ static int (*const svm_exit_handlers[])(struct kvm_vcpu *vcpu) = {
 	[SVM_EXIT_VMGEXIT]			= sev_handle_vmgexit,
 };
 
+/**
+ * @brief Copies the vmcb of the given vcpu into the result struct. Automatically decrypts
+ * the data if sev is enabled
+ * 
+ * code adapted from `void dump_vmcb(struct kvm_vcpu *vcpu)` (also in svm.c)
+
+ * 
+ * @param struct vcpu whose vm control block field should be decrypted
+ * @param result caller allocated. Will be filled with decrypted data
+ * @return int 0 on success
+ */
+int sev_step_get_vmcb_save_area(struct kvm_vcpu *vcpu, struct vmcb_save_area* result) {
+	struct vcpu_svm *svm = to_svm(vcpu);
+	struct vmcb_save_area *save = &svm->vmcb->save;
+	struct vmcb_save_area *save01 = &svm->vmcb01.ptr->save;
+
+
+
+	if (vcpu->arch.guest_state_protected && sev_snp_guest(vcpu->kvm)) {
+		struct kvm_sev_info *sev = &to_kvm_svm(vcpu->kvm)->sev_info;
+		struct page *save_page;
+		int ret, error;
+
+		save_page = alloc_page(GFP_KERNEL);
+		if (!save_page)
+			return 1;
+
+		save = page_address(save_page);
+		save01 = save;
+
+		//wbinvd_on_all_cpus();
+
+		ret = snp_guest_dbg_decrypt_page(__pa(sev->snp_context) >> PAGE_SHIFT,
+						 svm->vmcb->control.vmsa_pa >> PAGE_SHIFT,
+						 __pa(save) >> PAGE_SHIFT,
+						 &error);
+		if (ret) {
+			pr_err("%s: failed to decrypt vmsa %d\n", __func__, error);
+			return 1;
+		}
+
+		memcpy(result,save,sizeof(struct vmcb_save_area));
+
+		//wbinvd_on_all_cpus();
+		__free_page(virt_to_page(save));
+	} else {
+		memcpy(result,save,sizeof(struct vmcb_save_area));
+	}
+
+	return 0;
+}
+
 void dump_vmcb(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
@@ -3829,12 +3881,12 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 
 		printk("not sending fake intor to vm. does this lead to earlier lockup?\n");
 		//Looks like removing this code solves the freeze issue :O . Did the interrupt number change or sth?
-		/*printk("svm_vcpu_run: sending fake intr to vm to kick apic timer again\n");
+		printk("svm_vcpu_run: sending fake intr to vm to kick apic timer again\n");
 		svm->vcpu.arch.interrupt.injected = true;
 		svm->vcpu.arch.interrupt.soft = false; //not quite sure, seems to work
 		svm->vcpu.arch.interrupt.nr = 0xec;
 		svm_set_irq(&(svm->vcpu));
-		*/
+	
 
 		global_sev_step_config.single_stepping_status = SEV_STEP_STEPPING_STATUS_DISABLED;
 		global_sev_step_config.entry_counter = 0;
@@ -3859,10 +3911,10 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 				svm_set_irq(&(svm->vcpu));
 			} else {*/
 				//suppress injection of virtual apic interrupt to prevent jumping to intr handler in vm
-				if( ( svm->vmcb->control.event_inj & 0xff)== 0xec ) {
-					printk("DEBUG: allowing event injection\n");
-					//printk("ignoring exception injection due to active trace\n");
-					//svm_cancel_injection(&(svm->vcpu));
+				if( ( (svm->vmcb->control.event_inj & 0xff)== 0xec) && (svm->vcpu.arch.interrupt.injected ) ) {
+					//printk("DEBUG: allowing event injection\n");
+					printk("ignoring exception injection due to active trace\n");
+					svm_cancel_injection(&(svm->vcpu));
 				}
 			//}
 			
@@ -3874,8 +3926,26 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		//in this function we also start the cache priming and read the performance counters
 		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
 			printk("setting timer then vmenter\n");
+
+			printk("Dumping some vmcb data before entry\n");
+			printk("svm->vmcb->control.event_inj: 0x%x\n",svm->vmcb->control.event_inj);
+			printk("svm->vmcb->control.event_inj_err: 0x%x\n",svm->vmcb->control.event_inj_err);
+
+			printk("Dumping vcpu.arch.interrupt data before entry\n");
+			printk("svm->vcpu.arch.interrupt.injected: 0x%x\n",svm->vcpu.arch.interrupt.injected);
+			printk("svm->vcpu.arch.interrupt.soft: 0x%x\n",svm->vcpu.arch.interrupt.soft);
+			printk("svm->vcpu.arch.interrupt.nr: 0x%x\n",svm->vcpu.arch.interrupt.nr);
 		} else if (just_disblabled_stepping){
 			printk("just_disblabled_stepping = true, about to vmenter\n");
+
+			printk("Dumping some vmcb data before entry\n");
+			printk("svm->vmcb->control.event_inj: 0x%x\n",svm->vmcb->control.event_inj);
+			printk("svm->vmcb->control.event_inj_err: 0x%x\n",svm->vmcb->control.event_inj_err);
+
+			printk("Dumping vcpu.arch.interrupt data before entry\n");
+			printk("svm->vcpu.arch.interrupt.injected: 0x%x\n",svm->vcpu.arch.interrupt.injected);
+			printk("svm->vcpu.arch.interrupt.soft: 0x%x\n",svm->vcpu.arch.interrupt.soft);
+			printk("svm->vcpu.arch.interrupt.nr: 0x%x\n",svm->vcpu.arch.interrupt.nr);
 		}
 		mutex_unlock(&sev_step_config_mutex);
 		
@@ -3896,9 +3966,24 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		mutex_lock(&sev_step_config_mutex);
 		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
 			printk("global_sev_step_config.active = true vmexit\n");
+			printk("exit reasons: 0x%x",svm->vmcb->control.exit_code);
 			calculate_steps(&global_sev_step_config);
 		}  else if (just_disblabled_stepping){
 			printk("just_disblabled_stepping = true, vmexit\n");
+			printk("exit reasons: 0x%x",svm->vmcb->control.exit_code);
+
+		}
+		mutex_unlock(&sev_step_config_mutex);
+
+
+		mutex_lock(&sev_step_config_mutex);
+		if(global_sev_step_config.decrypt_rip) {
+			struct vmcb_save_area vmcb_sa;
+			if( sev_step_get_vmcb_save_area(&svm->vcpu,&vmcb_sa) ) {
+				printk("sev_step_get_vmcb_save_area failed\n");
+			}
+			global_sev_step_config.rip = vmcb_sa.rip;
+			global_sev_step_config.decrypt_rip = false;
 		}
 		mutex_unlock(&sev_step_config_mutex);
 

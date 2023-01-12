@@ -178,13 +178,14 @@ uint64_t sev_step_get_rip(struct vcpu_svm* svm) {
 	struct kvm_sev_info *sev;
 	uint64_t rip;
 
-
+	printk("sev_step_get_rip: got called\n");
 	kvm = svm->vcpu.kvm;
 	sev = &to_kvm_svm(kvm)->sev_info;
 
-	//for sev-es we need to use the debug api, to decrypt the vmsa
-	//switch to work  SEV and SEV-ES
-	if( sev->active && sev->es_active) {
+	printk("sev-active: %d, sev->es_active :%d, sev->snp_active: %d\n",sev->active,
+		sev->es_active,sev->snp_active);
+	//for sev-es and sev-snp we need to use the debug api, to decrypt the vmsa
+	if( sev->active && (sev->es_active || sev->snp_active)) {
 		int res;
 		save_area = vmalloc(sizeof(struct vmcb_save_area) );
 		memset(save_area,0, sizeof(struct vmcb_save_area));
@@ -260,6 +261,7 @@ void calculate_steps(sev_step_config_t *config) {
         config->perf_init = true;
     } else {
         read_ctr(CTR_MSR_0, perf_cpu, &perf_reads[0][1] );
+		//TODO: fix case where readings are identical. underflow is very confusing!
         config->counted_instructions = perf_reads[0][1] - perf_reads[0][0] -1;
         config->perf_init = false;
     }
@@ -376,7 +378,7 @@ long kvm_start_tracking(struct kvm_vcpu *vcpu,enum kvm_page_track_mode mode ) {
 }
 EXPORT_SYMBOL(kvm_start_tracking);
 
-//track all pages; taken from severed repo
+//untrack all pages; taken from severed repo
 long kvm_stop_tracking(struct kvm_vcpu *vcpu,enum kvm_page_track_mode mode ) {
 		long count = 0;
 		u64 iterator, iterat_max;
