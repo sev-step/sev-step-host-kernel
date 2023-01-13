@@ -51,25 +51,30 @@ static void dump_gate(gate_desc_t *gate, int idx)
 }
 
 /**
- * @brief Get the current idt
+ * @brief Get the current idt. This is core specific and must be called with interrupts enabled
  * 
- * @param idt struct for idt parameters
+ * @param config The retrieved idt is stored here together with the core for which it is valid
  */
-static void get_idt( idt_t *idt ) {
+void my_idt_init_idt( sev_step_config_t *config ) {
 	dtr_t idtr = {0};
 	int entries;
 
-	asm volatile ("sidt %0\n\t" :"=m"(idtr) :: );
+	if ( config->got_idt_on_cpu == smp_processor_id() ) {
+		return;
+	}
+	printk("my_idt_init_idt running on core: %d\n", smp_processor_id());
 
-	printk("idtr.size=%04x idtr.base = %016llx\n",idtr.size,idtr.base);
+	asm volatile ("sidt %0\n\t" :"=m"(idtr) :: );
 
 	entries = (idtr.size+1)/sizeof(gate_desc_t);
 
 	set_memory_rw(idtr.base,1);
 
-	idt->base = (gate_desc_t*) idtr.base;
-	idt->entries = entries;
+	config->idt.base = (gate_desc_t*) idtr.base;
+	config->idt.entries = entries;
+	config->got_idt_on_cpu = smp_processor_id();
 }
+EXPORT_SYMBOL(my_idt_init_idt);
 
 /**
  * @brief Install new irq handler
@@ -81,10 +86,7 @@ static void get_idt( idt_t *idt ) {
 void install_kernel_irq_handler(sev_step_config_t *config, void *asm_handler, int vector) {
 	gate_desc_t *gate;
 
-	 if( !config->idt_init ) {
-		 get_idt(&config->idt);
-		 config->idt_init = true;
-	 }
+	BUG_ON(config->got_idt_on_cpu != smp_processor_id());
 
     gate = gate_ptr(config->idt.base, vector);
 	printk("old gate:\n");
@@ -113,10 +115,8 @@ void install_kernel_irq_handler(sev_step_config_t *config, void *asm_handler, in
 static void restore_kernel_irq_handler(sev_step_config_t *config, int vector) {
 	gate_desc_t *gate;
 
-	 if( !config->idt_init ) {
-		 get_idt(&config->idt);
-		 config->idt_init = true;
-	 }
+	BUG_ON(config->got_idt_on_cpu != smp_processor_id());
+
 
     gate = gate_ptr(config->idt.base, vector);
 	memcpy(gate,&config->old_idt_gate, sizeof(gate_desc_t));
@@ -124,15 +124,17 @@ static void restore_kernel_irq_handler(sev_step_config_t *config, int vector) {
 
 //this function is called from asm
 void my_handler(void) {
-	get_cpu();
+	//luca: this caused "bad: scheduling from the idle thread"
+	//TODO: return here later and determine whether the get_cpu/put_cpu or the spinlock was at fault for this
+	//get_cpu();
 	apic_write(APIC_EOI, 0x0); //aknowledge interrupt
-	printk("my handler is running on: %d\n", smp_processor_id());
+	//printk("my handler is running on: %d\n", smp_processor_id());
 
-	mutex_lock(&sev_step_config_mutex);
+	//mutex_lock(&sev_step_config_mutex);
 	global_sev_step_config.waitingForTimer = false;
 	global_sev_step_config.decrypt_rip = true; //requset rip printing in svm.c handler
-	mutex_unlock(&sev_step_config_mutex);
-	put_cpu();
+	//mutex_unlock(&sev_step_config_mutex);
+	//put_cpu();
 }
 
 void apic_restore(sev_step_config_t *config) {
@@ -171,8 +173,9 @@ void my_idt_start_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) {
 	timmer programming has not yet been processed
 	*/
 
+	mutex_lock(&sev_step_config_mutex);
 	if( !config->waitingForTimer && sev_step_is_single_stepping_active(config) ) {
-		calculate_steps(config);
+		mutex_unlock(&sev_step_config_mutex);
 		//it's assumed that the old timer config has been backed up
 		 apic_write(APIC_LVTT, IRQ_NUMBER | APIC_LVT_TIMER_ONESHOT);
    		 apic_write(APIC_TDCR, APIC_TDR_DIV_2);
@@ -182,6 +185,8 @@ void my_idt_start_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) {
 
 		__asm__("mfence");
 		apic_write(APIC_TMICT, config->tmict_value); 
+	} else {
+		mutex_unlock(&sev_step_config_mutex);
 	}
 	
 	put_cpu();

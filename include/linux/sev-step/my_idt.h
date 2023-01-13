@@ -3,6 +3,8 @@
 #include <linux/sev-step/sev-step.h>
 #include "svm/svm.h"
 
+void my_idt_init_idt( sev_step_config_t *config );
+
 /**
  * @brief Install the new handler on cpu
  * 

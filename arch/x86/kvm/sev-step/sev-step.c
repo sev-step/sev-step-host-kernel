@@ -22,7 +22,7 @@ sev_step_config_t global_sev_step_config = {
     .main_vm = NULL,
     .decrypt_rip = false,
     .waitingForTimer = false,
-    .idt_init = false,
+    .got_idt_on_cpu = -1,
 	.perf_init = false,
 	.entry_counter = 0,
 
@@ -208,19 +208,19 @@ uint64_t sev_step_get_rip(struct vcpu_svm* svm) {
 EXPORT_SYMBOL(sev_step_get_rip);
 
 void write_ctl(perf_ctl_config_t * config, int cpu, uint64_t ctl_msr){
-	wrmsrl_on_cpu(cpu, ctl_msr, perf_ctl_to_u64(config)); //always returns zero
+	wrmsrl( ctl_msr, perf_ctl_to_u64(config)); //always returns zero
 }
 
 void read_ctr(uint64_t ctr_msr, int cpu, uint64_t* result) {
     uint64_t tmp;
-	rdmsrl_on_cpu(cpu, ctr_msr, &tmp); //always returns zero
+	rdmsrl( ctr_msr, tmp); //always returns zero
 	*result = tmp & ( (0x1ULL << 48) - 1);
 }
 
 void setup_perfs() {
     int i;
     
-    perf_cpu = smp_processor_id();
+    //perf_cpu = smp_processor_id();
     
     for( i = 0; i < 6; i++) {
         perf_configs[i].HostGuestOnly = 0x1; //0x1 means: count only guest
@@ -252,11 +252,7 @@ void setup_perfs() {
 EXPORT_SYMBOL(setup_perfs);
 
 void calculate_steps(sev_step_config_t *config) {
-    if( perf_cpu != smp_processor_id() ) {
-        printk("calculate_steps: called on cpu %d but setup_perfs was called on cpu %d\n", smp_processor_id(), perf_cpu);
-    }
-
-    if(!config->perf_init) {
+   if(!config->perf_init) {
         read_ctr(CTR_MSR_0, perf_cpu, &perf_reads[0][0]);        
         config->perf_init = true;
     } else {
@@ -276,12 +272,6 @@ bool __untrack_single_page(struct kvm_vcpu *vcpu, gfn_t gfn,
 
   ret = false;
   idx = srcu_read_lock(&vcpu->kvm->srcu);
-//   if (mode == KVM_PAGE_TRACK_ACCESS) {
-//     printk("Removing gfn: %016llx from acess page track pool\n", gfn);
-//   }
-//   if (mode == KVM_PAGE_TRACK_WRITE) {
-//     //printk("Removing gfn: %016llx from write page track pool\n", gfn);
-//   }
   slot = kvm_vcpu_gfn_to_memslot(vcpu, gfn);
 
   if (slot != NULL && kvm_page_track_is_active(vcpu, gfn, mode)) {
@@ -314,13 +304,6 @@ bool __track_single_page(struct kvm_vcpu *vcpu, gfn_t gfn,
 
   ret = false;
   idx = srcu_read_lock(&vcpu->kvm->srcu);
-//   if (mode == KVM_PAGE_TRACK_ACCESS) {
-//     //printk_ratelimited("Adding gfn: %016llx to acess page track pool\n", gfn);
-//     printk("Adding gfn: %016llx to acess page track pool\n", gfn);
-//   }
-//   if (mode == KVM_PAGE_TRACK_WRITE) {
-//     //printk_ratelimited("Adding gfn: %016llx to write page track pool\n", gfn);
-//   }
   slot = kvm_vcpu_gfn_to_memslot(vcpu, gfn);
   if (slot != NULL && !kvm_page_track_is_active(vcpu, gfn, mode)) {
 

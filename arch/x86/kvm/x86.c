@@ -83,6 +83,11 @@
 #define CREATE_TRACE_POINTS
 #include "trace.h"
 
+
+
+#include <linux/sev-step/my_idt.h>
+
+
 #define MAX_IO_MSRS 256
 #define KVM_MAX_MCE_BANKS 32
 u64 __read_mostly kvm_mce_cap_supported = MCG_CTL_P | MCG_SER_P;
@@ -9630,7 +9635,17 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 
 	preempt_disable();
 
+	//this snippet requires interrupts enabled
+	mutex_lock(&sev_step_config_mutex);
+	my_idt_init_idt(&global_sev_step_config);
+	mutex_unlock(&sev_step_config_mutex);
+
+
+
 	static_call(kvm_x86_prepare_guest_switch)(vcpu);
+
+
+	//luca: vcpu interrupt investigation: interrupt disable
 
 	/*
 	 * Disable IRQs before setting IN_GUEST_MODE.  Posted interrupt
@@ -9693,6 +9708,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 	}
 
 	for (;;) {
+		//luca: is this the vm enter patch
 		exit_fastpath = static_call(kvm_x86_run)(vcpu);
 		if (likely(exit_fastpath != EXIT_FASTPATH_REENTER_GUEST))
 			break;
@@ -9769,6 +9785,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 
 	local_irq_enable();
 	preempt_enable();
+
 
 	vcpu->srcu_idx = srcu_read_lock(&vcpu->kvm->srcu);
 
@@ -9862,8 +9879,19 @@ static int vcpu_run(struct kvm_vcpu *vcpu)
 			break;
 
 		kvm_clear_request(KVM_REQ_UNBLOCK, vcpu);
-		if (kvm_cpu_has_pending_timer(vcpu))
+		//luca: interrupt investigation. could this be the root source of timer injection
+		if (kvm_cpu_has_pending_timer(vcpu)) {
+
+			mutex_lock(&sev_step_config_mutex);
+			if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
+				printk("%s:%d - %s() : single stepping active, calling kvm_inject_pending_timer_irqs\n",
+				__FILE__, __LINE__, __FUNCTION__);
+			}
+			mutex_unlock(&sev_step_config_mutex);
+
+
 			kvm_inject_pending_timer_irqs(vcpu);
+		}
 
 		if (dm_request_for_irq_injection(vcpu) &&
 			kvm_vcpu_ready_for_interrupt_injection(vcpu)) {

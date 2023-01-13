@@ -2114,12 +2114,6 @@ static int smi_interception(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 	++svm->vcpu.stat.irq_exits;
-	mutex_lock(&sev_step_config_mutex);
-	if(global_sev_step_config.decrypt_rip) {
-		global_sev_step_config.rip = sev_step_get_rip(svm);
-		global_sev_step_config.decrypt_rip = false;
-	}
-	mutex_unlock(&sev_step_config_mutex);
 	return 1;
 }
 
@@ -3855,107 +3849,21 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 	unsigned long vmcb_pa = svm->current_vmcb->pa;
-	//TODO: just for debug printing
-	bool just_disblabled_stepping = false;
-	unsigned long flags;
+
+
+
 	
-	//save current interrupt state (which also disables them)
-	local_irq_save(flags);
-	//enable interrutps
-	local_irq_enable();
-
-	mutex_lock(&sev_step_config_mutex);
-	if(global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_DISABLED_WANT_INIT ) {
-		setup_perfs();
-		printk("svm_vcpu_run: prepared PERF");
-		my_idt_install_handler(&global_sev_step_config);
-		printk("svm_vcpu_run: installed my_idt handler\n");
-		printk("svm_vcpu_run: Backup apic timer\n");
-		apic_backup(&global_sev_step_config);
-
-		global_sev_step_config.single_stepping_status = SEV_STEP_STEPPING_STATUS_ENABLED;
-		
-	} else if (global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE) {
-		printk("svm_vcpu_run: Restoring old apic timer values\n");
-		apic_restore(&global_sev_step_config);
-
-		printk("not sending fake intor to vm. does this lead to earlier lockup?\n");
-		//Looks like removing this code solves the freeze issue :O . Did the interrupt number change or sth?
-		printk("svm_vcpu_run: sending fake intr to vm to kick apic timer again\n");
-		svm->vcpu.arch.interrupt.injected = true;
-		svm->vcpu.arch.interrupt.soft = false; //not quite sure, seems to work
-		svm->vcpu.arch.interrupt.nr = 0xec;
-		svm_set_irq(&(svm->vcpu));
-	
-
-		global_sev_step_config.single_stepping_status = SEV_STEP_STEPPING_STATUS_DISABLED;
-		global_sev_step_config.entry_counter = 0;
-
-		//TODO: just debug
-		just_disblabled_stepping = true;
-
-	}
-	mutex_unlock(&sev_step_config_mutex);
 
 	//luca: also includes sev-snp, i.e. is inclusive hierachy
 	if (sev_es_guest(vcpu->kvm)) {
-
 		mutex_lock(&sev_step_config_mutex);
 		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
-			global_sev_step_config.entry_counter += 1;
-			/*if( global_sev_step_config.entry_counter % 100 == 0) {
-				printk("svm_vcpu_run: sending *periodic* fake intr to vm to kick apic timer again\n");
-				svm->vcpu.arch.interrupt.injected = true;
-				svm->vcpu.arch.interrupt.soft = false; //not quite sure, seems to work
-				svm->vcpu.arch.interrupt.nr = 0xec;
-				svm_set_irq(&(svm->vcpu));
-			} else {*/
-				//suppress injection of virtual apic interrupt to prevent jumping to intr handler in vm
-				if( ( (svm->vmcb->control.event_inj & 0xff)== 0xec) && (svm->vcpu.arch.interrupt.injected ) ) {
-					//printk("DEBUG: allowing event injection\n");
-					printk("ignoring exception injection due to active trace\n");
-					svm_cancel_injection(&(svm->vcpu));
-				}
-			//}
-			
-
-			svm_flush_tlb(&(svm->vcpu)); //flushes whole tlb of guest //HUGE IMPROVEMENT!!!
-
-		}
-		
-		//in this function we also start the cache priming and read the performance counters
-		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
-			printk("setting timer then vmenter\n");
-
-			printk("Dumping some vmcb data before entry\n");
-			printk("svm->vmcb->control.event_inj: 0x%x\n",svm->vmcb->control.event_inj);
-			printk("svm->vmcb->control.event_inj_err: 0x%x\n",svm->vmcb->control.event_inj_err);
-
-			printk("Dumping vcpu.arch.interrupt data before entry\n");
-			printk("svm->vcpu.arch.interrupt.injected: 0x%x\n",svm->vcpu.arch.interrupt.injected);
-			printk("svm->vcpu.arch.interrupt.soft: 0x%x\n",svm->vcpu.arch.interrupt.soft);
-			printk("svm->vcpu.arch.interrupt.nr: 0x%x\n",svm->vcpu.arch.interrupt.nr);
-		} else if (just_disblabled_stepping){
-			printk("just_disblabled_stepping = true, about to vmenter\n");
-
-			printk("Dumping some vmcb data before entry\n");
-			printk("svm->vmcb->control.event_inj: 0x%x\n",svm->vmcb->control.event_inj);
-			printk("svm->vmcb->control.event_inj_err: 0x%x\n",svm->vmcb->control.event_inj_err);
-
-			printk("Dumping vcpu.arch.interrupt data before entry\n");
-			printk("svm->vcpu.arch.interrupt.injected: 0x%x\n",svm->vcpu.arch.interrupt.injected);
-			printk("svm->vcpu.arch.interrupt.soft: 0x%x\n",svm->vcpu.arch.interrupt.soft);
-			printk("svm->vcpu.arch.interrupt.nr: 0x%x\n",svm->vcpu.arch.interrupt.nr);
+			printk("calculate_steps before: irqs_disabled?: 0x%x",irqs_disabled());
+			calculate_steps(&global_sev_step_config);
 		}
 		mutex_unlock(&sev_step_config_mutex);
-		
-		//now that we are done with our code,
-		// restore interrupt state that we saved earlier when
-		//entering the function
-		local_irq_restore(flags);
 
-	
-
+		//function checks if single stepping is enabled
 		my_idt_start_apic_timer(&global_sev_step_config, svm);
 
 		kvm_guest_enter_irqoff();
@@ -3965,60 +3873,23 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 
 		mutex_lock(&sev_step_config_mutex);
 		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
-			printk("global_sev_step_config.active = true vmexit\n");
-			printk("exit reasons: 0x%x",svm->vmcb->control.exit_code);
+			printk("calculate_steps after: irqs_disabled?: 0x%x",irqs_disabled());
 			calculate_steps(&global_sev_step_config);
-		}  else if (just_disblabled_stepping){
-			printk("just_disblabled_stepping = true, vmexit\n");
-			printk("exit reasons: 0x%x",svm->vmcb->control.exit_code);
-
 		}
 		mutex_unlock(&sev_step_config_mutex);
 
 
-		mutex_lock(&sev_step_config_mutex);
-		if(global_sev_step_config.decrypt_rip) {
-			struct vmcb_save_area vmcb_sa;
-			if( sev_step_get_vmcb_save_area(&svm->vcpu,&vmcb_sa) ) {
-				printk("sev_step_get_vmcb_save_area failed\n");
-			}
-			global_sev_step_config.rip = vmcb_sa.rip;
-			global_sev_step_config.decrypt_rip = false;
+	mutex_lock(&sev_step_config_mutex);
+	if(global_sev_step_config.decrypt_rip) {
+		struct vmcb_save_area vmcb_sa;
+		if( sev_step_get_vmcb_save_area(&svm->vcpu,&vmcb_sa) ) {
+			printk("sev_step_get_vmcb_save_area failed\n");
 		}
-		mutex_unlock(&sev_step_config_mutex);
-
-		mutex_lock(&sev_step_config_mutex);
-		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
-			int send_ret = 0;
-			sev_step_event_t ss_event = {
-				.counted_instructions = global_sev_step_config.counted_instructions,
-				.sev_rip = global_sev_step_config.rip, 
-			};
-
-			if( global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE ) {
-				printk("ignoring single step event, as user already requestd signle step disable\n");
-				mutex_unlock(&sev_step_config_mutex);
-			} else {
-				mutex_unlock(&sev_step_config_mutex); //if we call usp_send_and_block while holding the lock, we could not terminate/abort until sent is done
-				//as the ioctl api also uses this lock
-				send_ret = usp_send_and_block(uspt_ctx, SEV_STEP_EVENT, (void *)&ss_event);
-				//sent sev step event
-				switch (send_ret)
-				{
-				case 2:
-					printk("usp_send_and_block aborted due to force_reset\n");
-					break;
-				case 0:
-					//no error
-					break;
-				default:
-					printk("usp_send_and_block: Failed in svm_vcpu_run with %d",send_ret);
-					break;
-				}
-			}
-		} else {
-			mutex_unlock(&sev_step_config_mutex);
-		}
+		//TODO: return here once we figured out if we can take a spinlock in isr_wrapper
+		global_sev_step_config.rip = vmcb_sa.rip;
+		global_sev_step_config.decrypt_rip = false;
+	}
+	mutex_unlock(&sev_step_config_mutex);
 
 	} else {
 		struct svm_cpu_data *sd = per_cpu(svm_data, vcpu->cpu);
@@ -4042,8 +3913,11 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 
 static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 {
+	bool just_disblabled_stepping = false;
 	struct vcpu_svm *svm = to_svm(vcpu);
 
+
+	//printk("svm_vcpu_run: irqs_disabled?: 0x%x",irqs_disabled());
 	trace_kvm_entry(vcpu);
 
 	svm->vmcb->save.rax = vcpu->arch.regs[VCPU_REGS_RAX];
@@ -4088,6 +3962,93 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 		svm_set_dr6(svm, vcpu->arch.dr6);
 	else
 		svm_set_dr6(svm, DR6_ACTIVE_LOW);
+
+
+	//
+	// Sev step, "before" block
+	//
+
+
+	mutex_lock(&sev_step_config_mutex);
+	if(global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_DISABLED_WANT_INIT ) {
+		setup_perfs();
+		printk("svm_vcpu_run: prepared PERF");
+		my_idt_install_handler(&global_sev_step_config);
+		printk("svm_vcpu_run: installed my_idt handler\n");
+		printk("svm_vcpu_run: Backup apic timer\n");
+		apic_backup(&global_sev_step_config);
+
+		global_sev_step_config.single_stepping_status = SEV_STEP_STEPPING_STATUS_ENABLED;
+		
+	} else if (global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE) {
+		printk("svm_vcpu_run: Restoring old apic timer values\n");
+		apic_restore(&global_sev_step_config);
+
+		printk("svm_vcpu_run: sending fake intr to vm to kick apic timer again\n");
+		svm->vcpu.arch.interrupt.injected = true;
+		svm->vcpu.arch.interrupt.soft = false;
+		svm->vcpu.arch.interrupt.nr = 0xec;
+		svm_set_irq(&(svm->vcpu));
+	
+
+		global_sev_step_config.single_stepping_status = SEV_STEP_STEPPING_STATUS_DISABLED;
+		global_sev_step_config.entry_counter = 0;
+		just_disblabled_stepping = true;
+
+
+	}
+	mutex_unlock(&sev_step_config_mutex);
+
+
+	mutex_lock(&sev_step_config_mutex);
+	if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
+		global_sev_step_config.entry_counter += 1;
+		//suppress injection of virtual apic interrupt to prevent jumping to intr handler in vm
+		if( ( (svm->vmcb->control.event_inj & 0xff)== 0xec) && (svm->vcpu.arch.interrupt.injected ) ) {
+			//printk("DEBUG: allowing event injection\n");
+			printk("ignoring exception injection due to active trace\n");
+			svm_cancel_injection(&(svm->vcpu));
+		}
+		
+
+		svm_flush_tlb(&(svm->vcpu)); //flushes whole tlb of guest //HUGE IMPROVEMENT!!!
+
+	}
+	
+	//in this function we also start the cache priming and read the performance counters
+	if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
+		printk("setting timer then vmenter\n");
+
+		printk("Dumping some vmcb data before entry\n");
+		printk("svm->vmcb->control.event_inj: 0x%x\n",svm->vmcb->control.event_inj);
+		printk("svm->vmcb->control.event_inj_err: 0x%x\n",svm->vmcb->control.event_inj_err);
+
+		printk("Dumping vcpu.arch.interrupt data before entry\n");
+		printk("svm->vcpu.arch.interrupt.injected: 0x%x\n",svm->vcpu.arch.interrupt.injected);
+		printk("svm->vcpu.arch.interrupt.soft: 0x%x\n",svm->vcpu.arch.interrupt.soft);
+		printk("svm->vcpu.arch.interrupt.nr: 0x%x\n",svm->vcpu.arch.interrupt.nr);
+	} else if (just_disblabled_stepping) {
+		printk("just_disblabled_stepping = true, about to vmenter\n");
+
+		printk("Dumping some vmcb data before entry\n");
+		printk("svm->vmcb->control.event_inj: 0x%x\n",svm->vmcb->control.event_inj);
+		printk("svm->vmcb->control.event_inj_err: 0x%x\n",svm->vmcb->control.event_inj_err);
+
+		printk("Dumping vcpu.arch.interrupt data before entry\n");
+		printk("svm->vcpu.arch.interrupt.injected: 0x%x\n",svm->vcpu.arch.interrupt.injected);
+		printk("svm->vcpu.arch.interrupt.soft: 0x%x\n",svm->vcpu.arch.interrupt.soft);
+		printk("svm->vcpu.arch.interrupt.nr: 0x%x\n",svm->vcpu.arch.interrupt.nr);
+	}
+	mutex_unlock(&sev_step_config_mutex);
+
+	
+	
+
+	//
+	// End of sev step "before" block
+	//
+
+
 
 	clgi();
 	kvm_load_guest_xsave_state(vcpu);
@@ -4150,6 +4111,67 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 		kvm_after_interrupt(vcpu);
 
 	sync_cr8_to_lapic(vcpu);
+
+	//
+	// Sev step "after" block
+	//
+
+	
+	mutex_lock(&sev_step_config_mutex);
+	if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
+		printk("global_sev_step_config.active = true vmexit\n");
+		printk("exit reasons: 0x%x",svm->vmcb->control.exit_code);
+	}  else if (just_disblabled_stepping){
+		printk("just_disblabled_stepping = true, vmexit\n");
+		printk("exit reasons: 0x%x",svm->vmcb->control.exit_code);
+
+	}
+	mutex_unlock(&sev_step_config_mutex);
+
+
+	
+
+	mutex_lock(&sev_step_config_mutex);
+	if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
+		int send_ret = 0;
+		sev_step_event_t ss_event = {
+			.counted_instructions = global_sev_step_config.counted_instructions,
+			.sev_rip = global_sev_step_config.rip, 
+		};
+
+		if( global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE ) {
+			printk("ignoring single step event, as user already requestd signle step disable\n");
+			mutex_unlock(&sev_step_config_mutex);
+		} else {
+			/*if we would call usp_send_and_block while holding the lock, we could not terminate/abort until sent is done
+			as the ioctl api also uses this lock
+			*/
+			mutex_unlock(&sev_step_config_mutex); 
+			send_ret = usp_send_and_block(uspt_ctx, SEV_STEP_EVENT, (void *)&ss_event);
+			//sent sev step event
+			switch (send_ret)
+			{
+			case 2:
+				printk("usp_send_and_block aborted due to force_reset\n");
+				break;
+			case 0:
+				//no error
+				break;
+			default:
+				printk("usp_send_and_block: Failed in svm_vcpu_run with %d",send_ret);
+				break;
+			}
+		}
+	} else {
+		mutex_unlock(&sev_step_config_mutex);
+	}
+
+
+	//
+	// End of sev step after block
+	//
+
+	
 
 	svm->next_rip = 0;
 	if (is_guest_mode(vcpu)) {

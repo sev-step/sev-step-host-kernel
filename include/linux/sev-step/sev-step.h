@@ -72,9 +72,12 @@ typedef struct {
 	//TODO: testing to periodically send apic interrupts
 	uint64_t entry_counter;
 
-	/* All values for storing old apic config */
+	/// @brief core on which idt was retrieved or -1 if idt has never been fetched
+	int got_idt_on_cpu;
+	/// @brief if got_idt_on_cpu != -1, this holds the idt for that core
 	idt_t idt;
-	bool idt_init;
+
+	/* All values for storing old apic config */
 	uint32_t old_apic_lvtt;
 	uint32_t old_apic_tdcr;
 	uint32_t old_apic_tmict;
