@@ -411,3 +411,22 @@ bool __clear_nx_on_page(struct kvm_vcpu *vcpu, gfn_t gfn) {
 	return ret;
 }
 EXPORT_SYMBOL(__clear_nx_on_page);
+
+bool sev_step_reset_access_bit(struct kvm_vcpu *vcpu, gfn_t gfn) {
+	int idx;
+	bool ret;
+	struct kvm_memory_slot *slot;
+
+	ret = false;
+	idx = srcu_read_lock(&vcpu->kvm->srcu);
+	slot = kvm_vcpu_gfn_to_memslot(vcpu, gfn);
+	if( slot != NULL ) {
+		write_lock(&vcpu->kvm->mmu_lock);
+		kvm_mmu_slot_gfn_protect(vcpu->kvm,slot,gfn,PG_LEVEL_4K,KVM_PAGE_TRACK_RESET_ACCESSED);
+		write_unlock(&vcpu->kvm->mmu_lock);
+		ret = true;
+	}
+	srcu_read_unlock(&vcpu->kvm->srcu, idx);
+	return ret;
+}
+EXPORT_SYMBOL(sev_step_reset_access_bit);

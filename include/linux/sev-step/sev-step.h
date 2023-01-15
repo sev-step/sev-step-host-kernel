@@ -40,7 +40,7 @@ typedef struct {
 typedef enum  {
 	///@brief Not running
 	SEV_STEP_STEPPING_STATUS_DISABLED,
-	///@brief User requested to enable, still pending untill next vmenter
+	///@brief User requested to enable, still pending until next vmenter
 	SEV_STEP_STEPPING_STATUS_DISABLED_WANT_INIT,
 	///@brief Running
 	SEV_STEP_STEPPING_STATUS_ENABLED,
@@ -55,7 +55,7 @@ typedef enum  {
 typedef struct {
 	// value for the apic timer
     uint32_t tmict_value;
-	/// @brief Status of single steppign engine. See comments for enum type
+	/// @brief Status of single stepping engine. See comments for enum type
 	sev_step_stepping_status_t single_stepping_status;
 	// stores the number of steps executed in the vm
 	uint32_t counted_instructions;
@@ -71,6 +71,10 @@ typedef struct {
 	bool perf_init;
 	//TODO: testing to periodically send apic interrupts
 	uint64_t entry_counter;
+	/// @brief May be null. If set, we reset the ACCESS bits of these pages before vmentry
+	/// which improves single stepping accuracy
+	uint64_t* gpas_target_pages;
+	uint64_t gpas_target_pages_len;
 
 	/// @brief core on which idt was retrieved or -1 if idt has never been fetched
 	int got_idt_on_cpu;
@@ -115,6 +119,10 @@ typedef struct {
 typedef struct {
 	// apic timer value
     uint32_t tmict_value;
+	/// @brief May be null. If set, we reset the ACCESS bits of these pages before vmentry
+	/// which improves single stepping accuracy
+	uint64_t* gpas_target_pages;
+	uint64_t gpas_target_pages_len;
 } sev_step_param_t;
 
 extern sev_step_config_t global_sev_step_config;
@@ -209,7 +217,19 @@ void calculate_steps(sev_step_config_t *config);
  */
 bool __clear_nx_on_page(struct kvm_vcpu *vcpu, gfn_t gfn);
 
+/**
+ * @brief Reset the access bit (dont' confuse with present bit, for access tracking)
+ * for the given gfn. Mainly used to get more stable single
+ * stepping as the page table walker has to reset this bit, enlarging the window where a timer interrupt
+ * leads to a single step
+ * 
+ * @param vcpu 
+ * @param gfn guest frame number
+ * @return true on success
+ * @return false on error
+ */
 
+bool sev_step_reset_access_bit(struct kvm_vcpu *vcpu, gfn_t gfn);
 /**
  * @brief Helper function that return true for all sev_step_stepping_status_t states in which
  * signle stepping is enabled

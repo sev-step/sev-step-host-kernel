@@ -4869,6 +4869,8 @@ static long kvm_dev_ioctl(struct file *filp,
 	} break;
 	case KVM_SEV_STEP_ENABLE: {
 		sev_step_param_t param;
+		uint64_t* gpas_target_pages = NULL;
+		size_t gpas_target_pages_bytes;
 		printk("KVM_SEV_STEP_ENABLE: got called\n");
 
 		if( copy_from_user(&param,argp, sizeof(param) ) ) {
@@ -4876,9 +4878,22 @@ static long kvm_dev_ioctl(struct file *filp,
 			return -EINVAL;
 		}
 
+		gpas_target_pages_bytes = param.gpas_target_pages_len * sizeof(uint64_t);
+		if( param.gpas_target_pages != NULL ) {
+			gpas_target_pages = kmalloc(gpas_target_pages_bytes, GFP_KERNEL);
+			if( copy_from_user(gpas_target_pages,param.gpas_target_pages,gpas_target_pages_bytes)) {
+				printk("KVM_SEV_STEP_ENABLE: failed to copy gpas_target_pages arg\n");
+				kfree(gpas_target_pages);
+				return -EINVAL;
+			}
+		}
+
 		//init config
 		mutex_lock(&sev_step_config_mutex);
+
 		global_sev_step_config.tmict_value = param.tmict_value;
+
+		//update stepping status state
 		switch (global_sev_step_config.single_stepping_status) {
 			case SEV_STEP_STEPPING_STATUS_DISABLED:
 				global_sev_step_config.single_stepping_status = SEV_STEP_STEPPING_STATUS_DISABLED_WANT_INIT;
@@ -4898,6 +4913,18 @@ static long kvm_dev_ioctl(struct file *filp,
 				mutex_unlock(&sev_step_config_mutex);
 				return -EINVAL;
 		}
+
+		//copy gpas_target_pages into global_sev_step_config
+		if(gpas_target_pages != NULL ) {
+			if(global_sev_step_config.gpas_target_pages != NULL ) {
+				kfree(global_sev_step_config.gpas_target_pages);
+			}
+			global_sev_step_config.gpas_target_pages = kmalloc(gpas_target_pages_bytes,GFP_KERNEL);
+			memcpy(global_sev_step_config.gpas_target_pages,gpas_target_pages,gpas_target_pages_bytes);
+			global_sev_step_config.gpas_target_pages_len = param.gpas_target_pages_len;
+			kfree(gpas_target_pages);
+		}
+
 		mutex_unlock(&sev_step_config_mutex);
 
 		printk("KVM_SEV_STEP_ENABLE: success\n");
@@ -4925,6 +4952,14 @@ static long kvm_dev_ioctl(struct file *filp,
 				mutex_unlock(&sev_step_config_mutex);
 				return -EINVAL;
 		}
+
+		//reset global_sev_step_config.gpas_target_pages
+		if( global_sev_step_config.gpas_target_pages != NULL ) {
+			kfree(global_sev_step_config.gpas_target_pages);
+			global_sev_step_config.gpas_target_pages = NULL;
+			global_sev_step_config.gpas_target_pages_len = 0;
+		}
+
 		mutex_unlock(&sev_step_config_mutex);
 
 		printk("KVM_SEV_STEP_DISABLE: success\n");

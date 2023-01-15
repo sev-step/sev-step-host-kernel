@@ -4010,13 +4010,18 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 			svm_cancel_injection(&(svm->vcpu));
 		}
 		
-
 		svm_flush_tlb(&(svm->vcpu)); //flushes whole tlb of guest //HUGE IMPROVEMENT!!!
+		if( global_sev_step_config.gpas_target_pages != NULL ) {
+			int target_gpa_idx;
 
-	}
-	
-	//in this function we also start the cache priming and read the performance counters
-	if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
+			printk("Resetting access bits for %llu target pages\n",global_sev_step_config.gpas_target_pages_len);
+			for( target_gpa_idx = 0; target_gpa_idx < global_sev_step_config.gpas_target_pages_len; target_gpa_idx++) {
+				uint64_t gpa = global_sev_step_config.gpas_target_pages[target_gpa_idx];
+				if(!sev_step_reset_access_bit(&svm->vcpu, gpa >> 12)) {
+					printk("failed to reset access bit for gpa: 0x%llx\n",gpa);
+				}
+			}
+		}
 		printk("setting timer then vmenter\n");
 
 		printk("Dumping some vmcb data before entry\n");
