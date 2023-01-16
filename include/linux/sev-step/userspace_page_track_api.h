@@ -5,6 +5,13 @@
 
 /* SEV-STEP API TYPES */
 
+typedef struct {
+    u64 rflags;
+	u64 rip;
+    u64 rsp;
+	u64 cr3;
+} sev_step_partial_vmcb_save_area_t;
+
 /**
  * @brief struct for storing tracking parameters 
  * which are sent from userspace

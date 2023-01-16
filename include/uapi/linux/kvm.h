@@ -2080,5 +2080,16 @@ struct kvm_stats_desc {
 #define KVM_USP_CLOSE_POLL_API _IO(KVMIO, 0x10)
 #define KVM_SEV_STEP_ENABLE _IOWR(KVMIO, 0x11, sev_step_param_t)
 #define KVM_SEV_STEP_DISABLE _IO(KVMIO, 0x12)
+/**
+ * @brief Injects an nmi into vm upon next vmrun.
+ * Should only be called while vm is halted
+ * 
+ */
+#define KVM_SEV_STEP_INJECT_NMI _IO(KVMIO, 0x13)
+/**
+ * @brief Use SEV-SNP debug API to decrypt vmcb save area.
+ * 
+ */
+#define KVM_SEV_STEP_GET_VMCB_SAVE_AREA _IOWR(KVMIO, 0x14, sev_step_partial_vmcb_save_area_t)
 
 #endif /* __LINUX_KVM_H */

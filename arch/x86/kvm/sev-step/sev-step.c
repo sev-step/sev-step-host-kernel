@@ -430,3 +430,45 @@ bool sev_step_reset_access_bit(struct kvm_vcpu *vcpu, gfn_t gfn) {
 	return ret;
 }
 EXPORT_SYMBOL(sev_step_reset_access_bit);
+
+
+
+int sev_step_get_vmcb_save_area(struct kvm_vcpu *vcpu, struct vmcb_save_area* result) {
+	struct vcpu_svm *svm = to_svm(vcpu);
+	struct vmcb_save_area *save = &svm->vmcb->save;
+	struct vmcb_save_area *save01 = &svm->vmcb01.ptr->save;
+
+
+
+	if (vcpu->arch.guest_state_protected && sev_snp_guest(vcpu->kvm)) {
+		struct kvm_sev_info *sev = &to_kvm_svm(vcpu->kvm)->sev_info;
+		struct page *save_page;
+		int ret, error;
+
+		save_page = alloc_page(GFP_KERNEL);
+		if (!save_page)
+			return 1;
+
+		save = page_address(save_page);
+		save01 = save;
+
+
+		ret = snp_guest_dbg_decrypt_page(__pa(sev->snp_context) >> PAGE_SHIFT,
+						 svm->vmcb->control.vmsa_pa >> PAGE_SHIFT,
+						 __pa(save) >> PAGE_SHIFT,
+						 &error);
+		if (ret) {
+			pr_err("%s: failed to decrypt vmsa %d\n", __func__, error);
+			return 1;
+		}
+
+		memcpy(result,save,sizeof(struct vmcb_save_area));
+
+		__free_page(virt_to_page(save));
+	} else {
+		memcpy(result,save,sizeof(struct vmcb_save_area));
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(sev_step_get_vmcb_save_area);

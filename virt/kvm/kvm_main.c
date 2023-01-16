@@ -72,6 +72,7 @@
 //	SEV STEP
 //
 #include <linux/sev-step/sev-step.h>
+#include <linux/sev-step/userspace_page_track_api.h>
 
 // Own spinlock implementation
 #include <linux/raw_spinlock.h>
@@ -4965,6 +4966,56 @@ static long kvm_dev_ioctl(struct file *filp,
 		printk("KVM_SEV_STEP_DISABLE: success\n");
 		r = 0;
 	} break;
+	case KVM_SEV_STEP_INJECT_NMI: {
+		printk("KVM_SEV_STEP_INJECT_NMI: got called\n");
+
+		mutex_lock(&sev_step_config_mutex);
+		if( global_sev_step_config.main_vm == NULL ) {
+			printk("KVM_SEV_STEP_INJECT_NMI: main_vm is NULL, aborting\n");
+			mutex_unlock(&sev_step_config_mutex);
+			return -EINVAL;
+		}
+
+		kvm_inject_nmi(global_sev_step_config.main_vm->vcpus[0]);
+		mutex_unlock(&sev_step_config_mutex);
+
+	}
+	r = 0;
+	break;
+	case KVM_SEV_STEP_GET_VMCB_SAVE_AREA: {
+		struct vmcb_save_area real_vmcb;
+		sev_step_partial_vmcb_save_area_t partial_vmcb;
+		printk("KVM_SEV_STEP_GET_VMCB_SAVE_AREA: got called\n");
+
+
+		mutex_lock(&sev_step_config_mutex);
+		if( global_sev_step_config.main_vm == NULL ) {
+			printk("KVM_SEV_STEP_GET_VMCB_SAVE_AREA: main_vm is NULL, aborting\n");
+			mutex_unlock(&sev_step_config_mutex);
+			return -EINVAL;
+		}
+
+		if( 0 != sev_step_get_vmcb_save_area(global_sev_step_config.main_vm->vcpus[0], &real_vmcb) ) {
+			printk("KVM_SEV_STEP_GET_VMCB_SAVE_AREA: sev_step_get_vmcb_save_area failed\n");
+			mutex_unlock(&sev_step_config_mutex);
+			return -EINVAL;
+		}
+		mutex_unlock(&sev_step_config_mutex);
+
+		partial_vmcb.rflags = real_vmcb.rflags;
+		partial_vmcb.rip = real_vmcb.rip;
+		partial_vmcb.rsp = real_vmcb.rsp;
+		partial_vmcb.cr3 = real_vmcb.cr3;
+
+		if (copy_to_user(argp, &partial_vmcb, sizeof(sev_step_partial_vmcb_save_area_t))) {
+			printk("KVM_SEV_STEP_GET_VMCB_SAVE_AREA: failed to copy results to userspace\n");
+			return -EFAULT;
+		}
+	
+
+	}
+	r = 0;
+	break;
 	default:
 		return kvm_arch_dev_ioctl(filp, ioctl, arg);
 	}

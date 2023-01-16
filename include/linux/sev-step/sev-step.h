@@ -6,6 +6,7 @@
 #include <asm/atomic.h>
 #include <linux/kvm_types.h>
 #include <asm/kvm_page_track.h>
+#include <asm/svm.h>
 
 #include "idt-gate-desc.h"
 
@@ -240,4 +241,16 @@ bool sev_step_reset_access_bit(struct kvm_vcpu *vcpu, gfn_t gfn);
  */
 bool sev_step_is_single_stepping_active(sev_step_config_t* cfg);
 
+/**
+ * @brief Copies the vmcb of the given vcpu into the result struct. Automatically decrypts
+ * the data if sev is enabled
+ * 
+ * code adapted from `void dump_vmcb(struct kvm_vcpu *vcpu)` (also in svm.c)
+
+ * 
+ * @param struct vcpu whose vm control block field should be decrypted
+ * @param result caller allocated. Will be filled with decrypted data
+ * @return int 0 on success
+ */
+int sev_step_get_vmcb_save_area(struct kvm_vcpu *vcpu, struct vmcb_save_area* result);
 #endif
