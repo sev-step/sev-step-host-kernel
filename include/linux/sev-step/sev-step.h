@@ -96,6 +96,11 @@ typedef struct {
 typedef struct {
 	uint32_t counted_instructions;
 	uint64_t sev_rip;
+	uint64_t* cache_attack_timings;
+	uint64_t* cache_attack_perf_values;
+	/// @brief length of both cache_attack_timings and
+	/// cache_attack_perf_values
+	uint64_t  cache_attack_data_len; 
 } sev_step_event_t;
 
 /**

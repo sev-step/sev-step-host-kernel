@@ -36,8 +36,9 @@ int get_size_for_event(usp_event_type_t event_type, uint64_t *size) {
  *  - 2 : force reset
  */
 int usp_send_and_block(usp_poll_api_ctx_t* ctx, usp_event_type_t event_type, void* event) {
-    uint64_t event_size = 0;
+    uint64_t event_bytes = 0;
     uint64_t abort_after = 0;
+    uint64_t event_buffer_offset = 0;
     const uint64_t sec_to_nanosec = 100000000000ULL;
 
 
@@ -76,13 +77,51 @@ we also reset have_event
     printk("usp_send_and_block: got lock\n");
     
     //copy event
-    if( get_size_for_event(event_type,&event_size)) {
+    if( get_size_for_event(event_type,&event_bytes)) {
         printk("Failed to determine size for event %d.",event_type);
         raw_spinlock_unlock(&ctx->shared_mem_region->spinlock);
         return 1;
     }
     printk("resolved event size, copying...\n");
-    memcpy((void*)ctx->shared_mem_region->event_buffer,event,event_size);
+    memcpy((void*)ctx->shared_mem_region->event_buffer + event_buffer_offset ,event,event_bytes);
+    event_buffer_offset += event_bytes;
+    if( event_type == SEV_STEP_EVENT) {
+        sev_step_event_t* step_event = (sev_step_event_t*)event;
+        if( step_event->cache_attack_timings != NULL ) {
+            uint64_t bytes = sizeof(step_event->cache_attack_timings[0]) * step_event->cache_attack_data_len;
+           
+            if( sizeof(ctx->shared_mem_region->event_buffer) < 
+                (event_buffer_offset + bytes ) ) {
+                    printk("Cannot copy cache attack timing data as event buffer is full\n");
+            } else {
+                printk("copying optional cache attack timing data\n %llu entries",
+                    step_event->cache_attack_data_len
+                );
+                memcpy((void*)ctx->shared_mem_region->event_buffer + event_buffer_offset,
+                    step_event->cache_attack_timings,bytes
+                );
+                event_buffer_offset += bytes;
+            }
+           
+        }
+        if( step_event->cache_attack_perf_values != NULL ) {
+            uint64_t bytes = sizeof(step_event->cache_attack_perf_values[0]) * step_event->cache_attack_data_len;
+           
+            if( sizeof(ctx->shared_mem_region->event_buffer) < 
+                (event_buffer_offset + bytes ) ) {
+                    printk("Cannot copy cache attack perf data as event buffer is full\n");
+            } else {
+                printk("copying optional cache attack perf data\n %llu entries",
+                    step_event->cache_attack_data_len
+                );
+                memcpy((void*)ctx->shared_mem_region->event_buffer + event_buffer_offset,
+                    step_event->cache_attack_perf_values,bytes
+                );
+                event_buffer_offset += bytes;
+            }
+           
+        }
+    }
        
     ctx->shared_mem_region->event_type = event_type;
     printk("usp_send_and_block: done copying. Setting status flags...\n");
@@ -187,6 +226,7 @@ int usp_poll_close_api(usp_poll_api_ctx_t* ctx) {
     raw_spinlock_lock(&ctx->shared_mem_region->spinlock);
     ctx->force_reset = 1;
     raw_spinlock_unlock(&ctx->shared_mem_region->spinlock);
+    //TODO: do the vunmap this somewhere?
     if( ctx->_page_for_shared_mem != NULL ) {
         unpin_user_pages(&ctx->_page_for_shared_mem,1);
     }
