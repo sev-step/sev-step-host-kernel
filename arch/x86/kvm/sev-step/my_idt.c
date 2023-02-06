@@ -13,6 +13,7 @@
 #include <linux/sev-step/sev-step.h>
 
 #include <asm/tlbflush.h>
+#include <asm/special_insns.h>
 
 
 
@@ -129,7 +130,6 @@ void my_handler(void) {
 	//get_cpu();
 	apic_write(APIC_EOI, 0x0); //aknowledge interrupt
 	//printk("my handler is running on: %d\n", smp_processor_id());
-
 	//mutex_lock(&sev_step_config_mutex);
 	global_sev_step_config.waitingForTimer = false;
 	global_sev_step_config.decrypt_rip = true; //requset rip printing in svm.c handler
@@ -168,28 +168,28 @@ void my_idt_install_handler(sev_step_config_t *config) {
 EXPORT_SYMBOL(my_idt_install_handler);
 
 void my_idt_start_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) {
-	get_cpu();
+	//get_cpu();
 	/*waitingFOrTimer == true means that the interrupt from the previous
 	timmer programming has not yet been processed
 	*/
 
 	mutex_lock(&sev_step_config_mutex);
 	if( !config->waitingForTimer && sev_step_is_single_stepping_active(config) ) {
+		uint32_t timer_value = config->tmict_value;
+
 		mutex_unlock(&sev_step_config_mutex);
 		//it's assumed that the old timer config has been backed up
 		 apic_write(APIC_LVTT, IRQ_NUMBER | APIC_LVT_TIMER_ONESHOT);
    		 apic_write(APIC_TDCR, APIC_TDR_DIV_2);
-
 		//start apic_timer_irq
 		config->waitingForTimer = true;
-
 		__asm__("mfence");
-		apic_write(APIC_TMICT, config->tmict_value); 
+		apic_write(APIC_TMICT, timer_value); 
 	} else {
 		mutex_unlock(&sev_step_config_mutex);
 	}
 	
-	put_cpu();
+	//put_cpu();
 
 }
 EXPORT_SYMBOL(my_idt_start_apic_timer);

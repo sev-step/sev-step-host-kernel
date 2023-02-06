@@ -9,6 +9,7 @@
 #include "mmu/mmu_internal.h"
 
 #include <linux/sev-step/sev-step.h>
+#include <linux/sev-step/libcache.h>
 #include "svm/svm.h"
 
 DEFINE_MUTEX(sev_step_config_mutex);
@@ -31,6 +32,8 @@ sev_step_config_t global_sev_step_config = {
     .old_apic_tdcr = 0,
     .old_apic_tmict = 0,
 	.old_idt_gate = {0},
+
+	.cache_attack_config = NULL,
 };
 EXPORT_SYMBOL(global_sev_step_config);
 
@@ -217,7 +220,7 @@ void read_ctr(uint64_t ctr_msr, int cpu, uint64_t* result) {
 	*result = tmp & ( (0x1ULL << 48) - 1);
 }
 
-void setup_perfs() {
+void setup_perfs(sev_step_config_t* config) {
     int i;
     
     //perf_cpu = smp_processor_id();
@@ -233,21 +236,23 @@ void setup_perfs() {
     }
     
     //remember to set .En to enable the individual counter
-
     perf_configs[0].EventSelect = 0x0c0;
 	perf_configs[0].UintMask = 0x0;
     perf_configs[0].En = 0x1;
 	write_ctl(&perf_configs[0],perf_cpu, CTL_MSR_0);
 
-    /*programm l2d hit from data cache miss perf for 
-    cpu_probe_pointer_chasing_inplace without counting thread.
-    N.B. that this time we count host events
-    */
-    perf_configs[1].EventSelect = 0x064;
-    perf_configs[1].UintMask = 0x70;
-    perf_configs[1].En = 0x1;
-    perf_configs[1].HostGuestOnly = 0x2; //0x2 means: count only host events, as we do the chase here
-    write_ctl(&perf_configs[1],perf_cpu,CTL_MSR_1);
+	if( config->cache_attack_config != NULL ) {
+		perf_configs[1] = config->cache_attack_config->cache_attack_perf;
+		if( perf_configs[1].En == 0 ) {
+			printk("%s:%d : %s Warning Cache Attack Perf not enabled!\n",
+				__FILE__,
+				__LINE__,
+				__FUNCTION__
+			);
+		}
+	}
+	write_ctl(&perf_configs[1],perf_cpu,CTL_MSR_1);
+    
 }
 EXPORT_SYMBOL(setup_perfs);
 
@@ -433,7 +438,17 @@ EXPORT_SYMBOL(sev_step_reset_access_bit);
 
 
 
-int sev_step_get_vmcb_save_area(struct kvm_vcpu *vcpu, struct vmcb_save_area* result) {
+
+void free_sev_step_cache_attack_config_t(sev_step_cache_attack_config_t* config) {
+	kfree(config->lookup_tables);
+	free_eviction_sets(config->eviction_sets,config->lookup_tables_len);
+	kfree(config);
+}
+EXPORT_SYMBOL(free_sev_step_cache_attack_config_t);
+
+
+int sev_step_get_vmcb_save_area(struct kvm_vcpu *vcpu, struct vmcb_save_area* vmcb_result,
+	struct sev_es_save_area *vmsa_result) {
 	struct vcpu_svm *svm = to_svm(vcpu);
 	struct vmcb_save_area *save = &svm->vmcb->save;
 	struct vmcb_save_area *save01 = &svm->vmcb01.ptr->save;
@@ -441,6 +456,7 @@ int sev_step_get_vmcb_save_area(struct kvm_vcpu *vcpu, struct vmcb_save_area* re
 
 
 	if (vcpu->arch.guest_state_protected && sev_snp_guest(vcpu->kvm)) {
+		struct sev_es_save_area *vmsa;
 		struct kvm_sev_info *sev = &to_kvm_svm(vcpu->kvm)->sev_info;
 		struct page *save_page;
 		int ret, error;
@@ -462,11 +478,14 @@ int sev_step_get_vmcb_save_area(struct kvm_vcpu *vcpu, struct vmcb_save_area* re
 			return 1;
 		}
 
-		memcpy(result,save,sizeof(struct vmcb_save_area));
+		memcpy(vmcb_result,save,sizeof(struct vmcb_save_area));
+
+		vmsa = (struct sev_es_save_area *)save;
+		memcpy(vmsa_result,vmsa,sizeof(struct sev_es_save_area));
 
 		__free_page(virt_to_page(save));
 	} else {
-		memcpy(result,save,sizeof(struct vmcb_save_area));
+		memcpy(vmcb_result,save,sizeof(struct vmcb_save_area));
 	}
 
 	return 0;

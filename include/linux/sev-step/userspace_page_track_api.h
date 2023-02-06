@@ -5,12 +5,80 @@
 
 /* SEV-STEP API TYPES */
 
+/**
+ * @brief struct for storing the performance counter config values
+ */
+typedef struct {
+	uint64_t HostGuestOnly;
+	uint64_t CntMask;
+	uint64_t Inv;
+	uint64_t En;
+	uint64_t Int;
+	uint64_t Edge;
+	uint64_t OsUserMode;
+	uint64_t UintMask;
+	uint64_t EventSelect; //12 bits in total split in [11:8] and [7:0]
+} perf_ctl_config_t;
+
 typedef struct {
     u64 rflags;
 	u64 rip;
     u64 rsp;
 	u64 cr3;
 } sev_step_partial_vmcb_save_area_t;
+
+
+typedef struct {
+    uint64_t lookup_table_index;
+} do_cache_attack_param_t;
+
+typedef struct {
+    /// @brief Input Parameter. We want the HPA for this
+    uint64_t in_gpa;
+    /// @brief Result Parameter.
+    uint64_t out_hpa;
+} gpa_to_hpa_param_t;
+
+/**
+ * @brief Describe lookup table that can be targeted by a cache attack
+ * 
+ */
+typedef struct {
+    /// @brief guest vaddr where the lookup table starts
+    uint64_t base_vaddr_table;
+    /// @brief length of the lookup table in bytes
+    uint64_t table_bytes;
+} lookup_table_t;
+
+typedef struct {
+    /// @brief we build and l1d way predictor eviction for each target
+    lookup_table_t* attack_targets;
+    uint64_t attack_targets_len;
+     /// @brief  configures the perf counter evaluated for the cache attack
+    perf_ctl_config_t cache_attack_perf;
+} build_eviction_set_param_t;
+
+typedef struct {
+    /// @brief flattened 2D array with the evictions sets.
+    /// Every @import_user_eviction_set_param_t.way_count elements form one eviction set
+    /// for each cache set covered by the lookup_table
+    uint64_t* eviction_sets;
+    /// @brief length of eviction_sets
+    uint64_t eviction_sets_len;
+} lookup_table_eviction_set_t;
+
+typedef struct {
+    /// @brief we build and l1d way predictor eviction for each target
+    lookup_table_t* attack_targets;
+    /// @brief eviction sets for the supplied attack_targets
+    lookup_table_eviction_set_t* eviction_sets;
+    /// @brief len of both attack_targets and eviction_sets 
+    uint64_t len;
+     /// @brief ways of the attacked cache
+    uint64_t way_count;
+    /// @brief  configures the perf counter evaluated for the cache attack
+    perf_ctl_config_t cache_attack_perf;
+} import_user_eviction_set_param_t;
 
 /**
  * @brief struct for storing tracking parameters 

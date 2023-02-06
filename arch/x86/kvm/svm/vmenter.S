@@ -159,8 +159,11 @@ SYM_FUNC_START(__svm_vcpu_run)
 SYM_FUNC_END(__svm_vcpu_run)
 
 /**
+__svm_sev_es_vcpu_run(unsigned long vmcb_pa,void* chase,void* chase_rev,
+uint64_t* result_array,uint64_t len, uint64_t* result_array);
  * __svm_sev_es_vcpu_run - Run a SEV-ES vCPU via a transition to SVM guest mode
- * @vmcb_pa:	unsigned long
+ * @vmcb_pa:	unsigned long -> rdi
+ * our chase ptr -> rsi
  */
 SYM_FUNC_START(__svm_sev_es_vcpu_run)
 	push %_ASM_BP
@@ -175,8 +178,21 @@ SYM_FUNC_START(__svm_sev_es_vcpu_run)
 #endif
 	push %_ASM_BX
 
+	/*save pointer to probe ptr becuase we need it again after the context switch*/
+	push %rsi
+
+	/*do prime with chase if chase ptr != null*/
+	test %rsi,%rsi
+	jz vmenter_cpu_prime_pointer_chasing_null
+	vmenter_cpu_prime_pointer_chasing:
+	mfence
+	mov (%rsi), %rsi
+	test %rsi,%rsi
+	jne vmenter_cpu_prime_pointer_chasing
+	vmenter_cpu_prime_pointer_chasing_null:
+
 	/* Move @vmcb to RAX. */
-	mov %_ASM_ARG1, %_ASM_AX
+	mov %rdi, %_ASM_AX
 
 	/* Enter guest mode */
 	sti
@@ -184,6 +200,19 @@ SYM_FUNC_START(__svm_sev_es_vcpu_run)
 1:	vmrun %_ASM_AX
 
 2:	cli
+
+	/*recover pointer chase ptr from stack*/
+	pop %rsi
+	/*check if chase ptr is null*/
+	test %rsi,%rsi 
+	/*if null jump forward to skip chasing*/
+	jz vmenter_probing_done
+	mfence
+	/*prepare chase ptr as first call arg*/
+	mov %rsi, %rdi
+	call cpu_probe_pointer_chasing_inplace
+
+	vmenter_probing_done:
 
 #ifdef CONFIG_RETPOLINE
 	/* IMPORTANT: Stuff the RSB immediately after VM-Exit, before RET! */

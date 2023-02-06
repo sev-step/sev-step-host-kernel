@@ -637,7 +637,7 @@ int sev_snp_update_protected_guest_state(struct kvm_vcpu *vcpu);
 
 /* vmenter.S */
 
-void __svm_sev_es_vcpu_run(unsigned long vmcb_pa);
+void __svm_sev_es_vcpu_run(unsigned long vmcb_pa,void* chase);
 void __svm_vcpu_run(unsigned long vmcb_pa, unsigned long *regs);
 
 #endif

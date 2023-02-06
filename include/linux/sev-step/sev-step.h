@@ -9,6 +9,8 @@
 #include <asm/svm.h>
 
 #include "idt-gate-desc.h"
+#include "libcache.h"
+#include "userspace_page_track_api.h"
 
 #define CTL_MSR_0  0xc0010200ULL
 #define CTL_MSR_1  0xc0010202ULL
@@ -49,6 +51,64 @@ typedef enum  {
 	SEV_STEP_STEPPING_STATUS_ENABLED_WANT_DISABLE,
 } sev_step_stepping_status_t;
 
+typedef enum  {
+	SEV_STEP_EV_TYPE_FROM_USER,
+	SEV_STEP_EV_TYPE_L1D_KERN_ONLY,
+	SEV_STEP_EV_TYPE_L1D_KERN_ONLY_ALIASING,
+} sev_step_cache_attack_ev_type_t;
+
+typedef enum {
+	SEV_STEP_CACHE_ATTACK_IDLE,
+	SEV_STEP_CACHE_ATTACK_WANT_PRIME,
+	SEV_STEP_CACHE_ATTACK_WANT_PROBE,
+	SEV_STEP_CACHE_ATTACK_HAVE_RESULT,
+} sev_step_cache_attack_status_t;
+
+
+
+
+
+typedef struct {
+	/// @brief lookup tables that we can attack. @eviction_sets contains
+	/// the corresponding eviction set to prime the whole table.
+	lookup_table_t* lookup_tables;
+	uint64_t lookup_tables_len;
+	/// @brief Each entry is an eviction set for the corresponding lookup table. The first
+	/// @way_count elements prime the first cacheline of the corresponding lookup table and so on
+	addr_list_t* eviction_sets;
+	/// @brief May be null from some @type values.
+	/// For some eviction sets we need to pin pages. In this case, we store
+	// for each eviction set an array of pointers to all the pinned pages. We use this later on to
+	//unpin them
+	struct page*** pinned_pages;
+	/// @brief pinned_pages_inner_len[idx] is the length of pinned_pages[idx]
+	uint64_t* pinned_pages_inner_len;
+	/// @brief way count of the attacked cache
+	uint64_t way_count;
+
+	/// @brief we use this to decide how to free the eviction set resources
+	sev_step_cache_attack_ev_type_t type;
+
+	/// @brief only used with SEV_STEP_EV_TYPE_L1D_KERN_ONLY_ALIASING. Terribly hacky
+	//TODO: refactor once we know if this attack works
+	uint64_t* chase_result_for_aliasing_attack;
+	uint64_t* probe_array;
+
+	/// @brief used to control when to probe, prime and sent the results
+	sev_step_cache_attack_status_t status;
+	/// @brief if cache attack is active, this holds the idx of the lookup table that we
+	/// want to attack
+	int victim_lookup_table_idx;
+
+
+	/// @brief config for perf counter evaluated in cache attack
+	perf_ctl_config_t cache_attack_perf;
+} sev_step_cache_attack_config_t;
+
+
+void free_sev_step_cache_attack_config_t(sev_step_cache_attack_config_t* config);
+void free_eviction_sets(addr_list_t* eviction_sets,uint64_t len);
+
 /**
  * @brief global struct holding all parameters needed for single
  * stepping with SEV-STEP
@@ -62,6 +122,7 @@ typedef struct {
 	uint32_t counted_instructions;
 	// stores the decrypted rip address
 	uint64_t rip;
+	uint64_t rax;
 	// stores the running vm
 	struct kvm* main_vm;
 	// if true, the rip address will be decrypted
@@ -82,11 +143,21 @@ typedef struct {
 	/// @brief if got_idt_on_cpu != -1, this holds the idt for that core
 	idt_t idt;
 
+	/// @brief May be null. If not, contains all config required for cache attack
+	sev_step_cache_attack_config_t* cache_attack_config;
+
+
 	/* All values for storing old apic config */
 	uint32_t old_apic_lvtt;
 	uint32_t old_apic_tdcr;
 	uint32_t old_apic_tmict;
 	gate_desc_t old_idt_gate;
+
+
+	bool state_save_values_valid;
+	uint64_t vmsa_hpa;
+	uint64_t vmcb_hpa;
+	uint64_t vmcb_control_kern_vaddr;
 } sev_step_config_t;
 
 /**
@@ -96,6 +167,7 @@ typedef struct {
 typedef struct {
 	uint32_t counted_instructions;
 	uint64_t sev_rip;
+	uint64_t sev_rax;
 	uint64_t* cache_attack_timings;
 	uint64_t* cache_attack_perf_values;
 	/// @brief length of both cache_attack_timings and
@@ -103,20 +175,8 @@ typedef struct {
 	uint64_t  cache_attack_data_len; 
 } sev_step_event_t;
 
-/**
- * @brief struct for storing the performance counter config values
- */
-typedef struct {
-	uint64_t HostGuestOnly;
-	uint64_t CntMask;
-	uint64_t Inv;
-	uint64_t En;
-	uint64_t Int;
-	uint64_t Edge;
-	uint64_t OsUserMode;
-	uint64_t UintMask;
-	uint64_t EventSelect; //12 bits in total split in [11:8] and [7:0]
-} perf_ctl_config_t;
+
+
 
 /**
  * @brief struct for storing sev-step config parameters
@@ -205,7 +265,7 @@ void read_ctr(uint64_t ctr_msr, int cpu, uint64_t* result);
 /**
  * @brief Setup the performance counter config
  */
-void setup_perfs(void);
+void setup_perfs(sev_step_config_t* config);
 
 /**
  * @brief Determine the amount of steps executed in the vm
@@ -254,8 +314,10 @@ bool sev_step_is_single_stepping_active(sev_step_config_t* cfg);
 
  * 
  * @param struct vcpu whose vm control block field should be decrypted
- * @param result caller allocated. Will be filled with decrypted data
+ * @param vmcb_result caller allocated. Will be filled with decrypted data
+ * @param sev_es_save_area caller allocated. Only filled for sev snp vm
  * @return int 0 on success
  */
-int sev_step_get_vmcb_save_area(struct kvm_vcpu *vcpu, struct vmcb_save_area* result);
+int sev_step_get_vmcb_save_area(struct kvm_vcpu *vcpu, struct vmcb_save_area* vmcb_result,
+	struct sev_es_save_area *vmsa_result);
 #endif
