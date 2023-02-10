@@ -2086,11 +2086,7 @@ struct kvm_stats_desc {
  * 
  */
 #define KVM_SEV_STEP_INJECT_NMI _IO(KVMIO, 0x13)
-/**
- * @brief Use SEV-SNP debug API to decrypt vmcb save area.
- * 
- */
-#define KVM_SEV_STEP_GET_VMCB_SAVE_AREA _IOWR(KVMIO, 0x14, sev_step_partial_vmcb_save_area_t)
+
 /**
  * @brief Build an L1D way predictor eviction set in kernel space
  * //TODO: probpably abandon in favor of KVM_SET_STEP_IMPORT_USER_EVS

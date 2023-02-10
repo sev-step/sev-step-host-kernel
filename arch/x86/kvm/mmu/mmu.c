@@ -3921,8 +3921,15 @@ static bool page_fault_handle_page_track(struct kvm_vcpu *vcpu,
 		int send_ret = 0;
 		usp_page_fault_event_t pf_event = {
 			//.id = ,
-			.faulted_gpa = (uint64_t)(gfn << PAGE_SHIFT)
+			.faulted_gpa = (uint64_t)(gfn << PAGE_SHIFT),
+			.is_decrypted_vmsa_data_valid = false,
 		};
+		mutex_lock(&sev_step_config_mutex);
+		if( global_sev_step_config.decrypt_vmsa ) {
+			pf_event.decrypted_vmsa_data = global_sev_step_config.decrypted_vmsa_data;
+			pf_event.is_decrypted_vmsa_data_valid = true;
+		}
+		mutex_unlock(&sev_step_config_mutex);
 		send_ret = usp_send_and_block(uspt_ctx, PAGE_FAULT_EVENT, (void *)&pf_event);
 			//sent sev step event
 			switch (send_ret)

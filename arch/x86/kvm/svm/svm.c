@@ -3858,7 +3858,7 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 
 
 	mutex_lock(&sev_step_config_mutex);
-	if(global_sev_step_config.decrypt_rip) {
+	if(global_sev_step_config.decrypt_vmsa) {
 		struct vmcb_save_area vmcb_sa;
 		struct sev_es_save_area* vmsa;
 		vmsa = kmalloc(sizeof(struct sev_es_save_area), GFP_KERNEL);
@@ -3868,12 +3868,15 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		
 		
 		//TODO: return here once we figured out if we can take a spinlock in isr_wrapper
-		global_sev_step_config.rip = vmcb_sa.rip;
+		global_sev_step_config.decrypted_vmsa_data.rip = vmcb_sa.rip;
 		if( vmsa != NULL ) {
-			global_sev_step_config.rax = vmsa->rax;
+			global_sev_step_config.decrypted_vmsa_data.rflags = vmsa->rflags;
+			global_sev_step_config.decrypted_vmsa_data.rsp = vmsa->rsp;
+			global_sev_step_config.decrypted_vmsa_data.cr3 = vmsa->cr3;
+
+		} else {
+			printk("sev_step_get_vmcb_save_area returned null for vmsa!");
 		}
-		printk("%s:%d setting global_sev_step_config.rax to 0x%llx\n",__FILE__,__LINE__,global_sev_step_config.rax);
-		global_sev_step_config.decrypt_rip = false;
 		kfree(vmsa);
 	}
 	mutex_unlock(&sev_step_config_mutex);
@@ -4136,12 +4139,16 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 		int send_ret = 0;
 		sev_step_event_t ss_event = {
 			.counted_instructions = global_sev_step_config.counted_instructions,
-			.sev_rip = global_sev_step_config.rip,
-			.sev_rax = global_sev_step_config.rax,
+		
 			.cache_attack_timings = NULL,
 			.cache_attack_perf_values = NULL,
 			.cache_attack_data_len = 0,
+			.is_decrypted_vmsa_data_valid = false,
 		};
+		if( global_sev_step_config.decrypt_vmsa ) {
+			ss_event.decrypted_vmsa_data = global_sev_step_config.decrypted_vmsa_data;
+			ss_event.is_decrypted_vmsa_data_valid = true;
+		}
 		if( global_sev_step_config.cache_attack_config != NULL && 
 			global_sev_step_config.cache_attack_config->status ==  SEV_STEP_CACHE_ATTACK_HAVE_RESULT &&
 			global_sev_step_config.cache_attack_config->type != SEV_STEP_EV_TYPE_L1D_KERN_ONLY_ALIASING ) {

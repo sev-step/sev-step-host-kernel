@@ -120,13 +120,14 @@ typedef struct {
 	sev_step_stepping_status_t single_stepping_status;
 	// stores the number of steps executed in the vm
 	uint32_t counted_instructions;
-	// stores the decrypted rip address
-	uint64_t rip;
-	uint64_t rax;
+	/// @brief if true, send vmsa information with each event.
+	/// Only works if debug mode is active
+	bool decrypt_vmsa;
+	/// @brief if decrypt_vmsa is true, we fill this with the decrypted vmsa data after
+	/// each vmexit. Other locations that want to send events can use this data
+	sev_step_partial_vmcb_save_area_t decrypted_vmsa_data;
 	// stores the running vm
 	struct kvm* main_vm;
-	// if true, the rip address will be decrypted
-	bool decrypt_rip;
 	// if true, interrupt from the previous timer programming has not yet been processed
 	bool waitingForTimer;
 	// if true, the performance counter is initialized
@@ -166,8 +167,9 @@ typedef struct {
  */
 typedef struct {
 	uint32_t counted_instructions;
-	uint64_t sev_rip;
-	uint64_t sev_rax;
+	sev_step_partial_vmcb_save_area_t decrypted_vmsa_data;
+	/// @brief if true, decrypted_vmsa_data contains valid data
+	bool is_decrypted_vmsa_data_valid;
 	uint64_t* cache_attack_timings;
 	uint64_t* cache_attack_perf_values;
 	/// @brief length of both cache_attack_timings and

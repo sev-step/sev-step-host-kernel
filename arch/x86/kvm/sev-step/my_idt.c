@@ -132,7 +132,6 @@ void my_handler(void) {
 	//printk("my handler is running on: %d\n", smp_processor_id());
 	//mutex_lock(&sev_step_config_mutex);
 	global_sev_step_config.waitingForTimer = false;
-	global_sev_step_config.decrypt_rip = true; //requset rip printing in svm.c handler
 	//mutex_unlock(&sev_step_config_mutex);
 	//put_cpu();
 }
