@@ -2,6 +2,7 @@
 #include <linux/uaccess.h>
 #include <linux/mm.h>
 #include <linux/vmalloc.h>
+#include <linux/slab.h>
 #include <linux/sev-step/userspace_page_track_api.h>
 #include <linux/raw_spinlock.h>
 #include <asm/string.h>
@@ -9,6 +10,8 @@
 
 usp_poll_api_ctx_t* uspt_ctx = NULL;
 EXPORT_SYMBOL(uspt_ctx);
+
+int SEV_STEP_SHARED_MEM_BYTES = 20 * 4096;
 
 int get_size_for_event(usp_event_type_t event_type, uint64_t *size) {
     switch (event_type)
@@ -171,30 +174,44 @@ we also reset have_event
 EXPORT_SYMBOL(usp_send_and_block);
 
 int usp_poll_init_user_vaddr(int pid,uint64_t user_vaddr_shared_mem,usp_poll_api_ctx_t* ctx) {
-    struct page *shared_mem_page;
+    struct page **shared_mem_pages;
 	shared_mem_region_t* shared_mem_kern_mapping;
     int res;
+    int shared_mem_pages_len;
+    int idx;
+
 
     //create persistent, kernel accessible mapping for user space memory
     if ( (user_vaddr_shared_mem & 0xfff) != 0 ) {
             printk("usp_poll_init_user_vaddr: the provided vaddr 0x%llx is not page aligend!\n",user_vaddr_shared_mem);
             return 1;
     }
-    printk("usp_poll_init_user_vaddr: trying get_user_pages_unlocked");
-    res = get_user_pages_unlocked(
-        user_vaddr_shared_mem, //start vaddr
-        1, //number of pages to pin from start vaddr
-        &shared_mem_page,
-        FOLL_WRITE
-        );
-    if( res <= 0 ) {
-        printk("usp_poll_init_user_vaddr: get_user_pages failed with %d\n",res);
+    if( (SEV_STEP_SHARED_MEM_BYTES % 4096) != 0 ) {
+         printk("usp_poll_init_user_vaddr: SEV_STEP_SHARED_MEM_BYTES is not a multiple of page size!\n");
         return 1;
     }
-    printk("usp_poll_init_user_vaddr: success, pinned %d pages\n",res);
+    shared_mem_pages_len = SEV_STEP_SHARED_MEM_BYTES / 4096;
+    shared_mem_pages = kmalloc(sizeof(struct page*) * shared_mem_pages_len, GFP_KERNEL);
 
 
-    shared_mem_kern_mapping = (shared_mem_region_t*)vmap(&shared_mem_page,1,0,PAGE_SHARED);
+    printk("usp_poll_init_user_vaddr: trying get_user_pages_unlocked");
+    for( idx = 0; idx < shared_mem_pages_len; idx++ ) {
+        res = get_user_pages_unlocked(
+            user_vaddr_shared_mem + (idx * 4096), //start vaddr
+            1, //number of pages to pin from start vaddr
+            &shared_mem_pages[idx],
+            FOLL_WRITE
+        );
+        if( res <= 0 ) {
+            printk("usp_poll_init_user_vaddr: get_user_pages failed with %d\n",res);
+            unpin_user_pages(shared_mem_pages, idx);
+            return 1;
+        }
+    }
+   
+
+
+    shared_mem_kern_mapping = (shared_mem_region_t*)vmap(shared_mem_pages,shared_mem_pages_len,0,PAGE_SHARED);
     if( shared_mem_kern_mapping == NULL ) {
         printk("usp_poll_init_user_vaddr: failed to get virtual mapping for page struct\n");
         return 1;
@@ -207,7 +224,8 @@ int usp_poll_init_user_vaddr(int pid,uint64_t user_vaddr_shared_mem,usp_poll_api
 
     //fix ctx values specific to this ctx creation path
 
-    ctx->_page_for_shared_mem = shared_mem_page;
+    ctx->_pages_for_shared_mem = shared_mem_pages;
+    ctx->_pages_for_shared_mem_len = shared_mem_pages_len;
     return 0;
 }
 
@@ -218,7 +236,8 @@ int usp_poll_init_kern_vaddr(int pid, shared_mem_region_t* shared_mem_region ,us
     ctx->next_id = 1;
     ctx->force_reset = 0;
     ctx->shared_mem_region = shared_mem_region;
-    ctx->_page_for_shared_mem = NULL;
+    ctx->_pages_for_shared_mem = NULL;
+    ctx->_pages_for_shared_mem_len = 0;
     return 0;
 }
 
@@ -226,10 +245,6 @@ int usp_poll_close_api(usp_poll_api_ctx_t* ctx) {
     raw_spinlock_lock(&ctx->shared_mem_region->spinlock);
     ctx->force_reset = 1;
     raw_spinlock_unlock(&ctx->shared_mem_region->spinlock);
-    //TODO: do the vunmap this somewhere?
-    if( ctx->_page_for_shared_mem != NULL ) {
-        unpin_user_pages(&ctx->_page_for_shared_mem,1);
-    }
     return 0;
 }
 

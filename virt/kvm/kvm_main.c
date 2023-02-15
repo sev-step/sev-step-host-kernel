@@ -5465,11 +5465,21 @@ static long kvm_dev_ioctl(struct file *filp,
 			r = 0;
 	} break;
 	case KVM_USP_CLOSE_POLL_API: {
+		struct page** pinned_pages;
+		int pinned_pages_len;
+		void* kernel_mapping;
 		printk("KVM_USP_CLOSE_POLL_API: got called\n");
 			if( uspt_ctx == NULL ) {
 				printk("KVM_USP_CLOSE_POLL_API: ctx already null");
 				return -EINVAL;
 			}
+
+			//store tmp copy so that we can postpone freeing untill we set
+			//ctx to NULL. This way we can be sure that no one will try to access these
+			//mappings anymore
+			pinned_pages = uspt_ctx->_pages_for_shared_mem;
+			pinned_pages_len = uspt_ctx->_pages_for_shared_mem_len;
+			kernel_mapping = uspt_ctx->shared_mem_region;
 
 			if( usp_poll_close_api(uspt_ctx) ) {
 				printk("KVM_USP_CLOSE_POLL_API: failed to close ctx\n");
@@ -5481,6 +5491,14 @@ static long kvm_dev_ioctl(struct file *filp,
 			// set to null to prevent page fault events 
 			// being send after api is closed
 			uspt_ctx = NULL;
+
+			if( kernel_mapping != NULL ) {
+				vunmap(kernel_mapping);
+			}
+    		if( pinned_pages != NULL ) {
+        		unpin_user_pages(pinned_pages,pinned_pages_len);
+				kfree(pinned_pages);
+    		}
 
 			// Resetting tracking
 			mutex_lock(&sev_step_config_mutex);

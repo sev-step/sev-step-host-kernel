@@ -127,6 +127,9 @@ typedef enum {
     SEV_STEP_EVENT,
 } usp_event_type_t;
 
+
+
+extern int SEV_STEP_SHARED_MEM_BYTES;
 /**
  * @brief Stores the structure of the shared memory 
  * region between kernelspace and userspace
@@ -141,7 +144,7 @@ typedef struct {
     //type of the stored event. Required to do the correct raw mem cast
     usp_event_type_t event_type;
     // buffer for the event
-    uint8_t event_buffer[2048];
+    uint8_t event_buffer[19 * 4096];
 } shared_mem_region_t;
 
 /**
@@ -172,8 +175,9 @@ typedef struct {
     int force_reset;
     
     //just for internal use. Used to remember get_user_pages_unlocked
-    //page to be able to unpinn it on ctx destruction
-    struct page* _page_for_shared_mem;
+    //pages to be able to unpinn it on ctx destruction
+    struct page** _pages_for_shared_mem;
+    int _pages_for_shared_mem_len;
 } usp_poll_api_ctx_t;
 
 /**
