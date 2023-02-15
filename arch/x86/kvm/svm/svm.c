@@ -3800,6 +3800,7 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 	void* chase = NULL;
 	struct vcpu_svm *svm = to_svm(vcpu);
 	unsigned long vmcb_pa = svm->current_vmcb->pa;
+	unsigned apic_timer_value =0;
 
 
 
@@ -3826,16 +3827,20 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 						global_sev_step_config.cache_attack_config->status = SEV_STEP_CACHE_ATTACK_WANT_PROBE;
 				}
 			}
+
+			if( !global_sev_step_config.waitingForTimer ) {
+				apic_timer_value = global_sev_step_config.tmict_value;
+			}
 		}
 		mutex_unlock(&sev_step_config_mutex);
 
 		//function checks if single stepping is enabled
 		kvm_guest_enter_irqoff();
 
-		my_idt_start_apic_timer(&global_sev_step_config, svm);
+		my_idt_prepare_apic_timer(&global_sev_step_config, svm);
 
 		//luca: assembly code in svm/vmenter.S
-		__svm_sev_es_vcpu_run(vmcb_pa,chase);
+		__svm_sev_es_vcpu_run(vmcb_pa,chase,apic_timer_value);
 		kvm_guest_exit_irqoff();
 
 		mutex_lock(&sev_step_config_mutex);

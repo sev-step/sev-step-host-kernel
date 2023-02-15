@@ -32,7 +32,7 @@ void apic_backup(sev_step_config_t *config);
  * @param config global sev step config
  * @param svm svm data struct
  */
-void my_idt_start_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm);
+void my_idt_prepare_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm);
 
 /**
  * @brief Install new idt handler

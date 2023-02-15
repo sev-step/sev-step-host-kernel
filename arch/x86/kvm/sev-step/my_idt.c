@@ -166,7 +166,7 @@ void my_idt_install_handler(sev_step_config_t *config) {
 }
 EXPORT_SYMBOL(my_idt_install_handler);
 
-void my_idt_start_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) {
+void my_idt_prepare_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) {
 	//get_cpu();
 	/*waitingFOrTimer == true means that the interrupt from the previous
 	timmer programming has not yet been processed
@@ -174,7 +174,6 @@ void my_idt_start_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) {
 
 	mutex_lock(&sev_step_config_mutex);
 	if( !config->waitingForTimer && sev_step_is_single_stepping_active(config) ) {
-		uint32_t timer_value = config->tmict_value;
 
 		mutex_unlock(&sev_step_config_mutex);
 		//it's assumed that the old timer config has been backed up
@@ -182,8 +181,8 @@ void my_idt_start_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) {
    		 apic_write(APIC_TDCR, APIC_TDR_DIV_2);
 		//start apic_timer_irq
 		config->waitingForTimer = true;
-		__asm__("mfence");
-		apic_write(APIC_TMICT, timer_value); 
+		//this is now in vmenter, to move it behind the cache priming code
+		//apic_write(APIC_TMICT, timer_value); 
 	} else {
 		mutex_unlock(&sev_step_config_mutex);
 	}
@@ -191,4 +190,5 @@ void my_idt_start_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) {
 	//put_cpu();
 
 }
-EXPORT_SYMBOL(my_idt_start_apic_timer);
+EXPORT_SYMBOL(my_idt_prepare_apic_timer);
+EXPORT_SYMBOL(apic_write);

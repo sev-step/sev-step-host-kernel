@@ -164,6 +164,7 @@ uint64_t* result_array,uint64_t len, uint64_t* result_array);
  * __svm_sev_es_vcpu_run - Run a SEV-ES vCPU via a transition to SVM guest mode
  * @vmcb_pa:	unsigned long -> rdi
  * our chase ptr -> rsi
+ * apic timer value. Start apic timer if != 0 -> rdx
  */
 SYM_FUNC_START(__svm_sev_es_vcpu_run)
 	push %_ASM_BP
@@ -190,6 +191,21 @@ SYM_FUNC_START(__svm_sev_es_vcpu_run)
 	test %rsi,%rsi
 	jne vmenter_cpu_prime_pointer_chasing
 	vmenter_cpu_prime_pointer_chasing_null:
+
+	/*only start apic timer after priming the cache, otherwise timer value
+	for single stepping would depend on eviction set size*/
+	test %rdx,%rdx
+	jz vmenter_skip_apic_write
+	/*save vmcb ptr*/
+	push %rdi
+	/*APIC_TMICT -> 1st arg*/
+	mov $0x380, %rdi
+	/*timer_value -> 2nd arg*/
+	mov %rdx, %rsi
+	call apic_write
+	/*restore vmcb ptr*/
+	pop %rdi
+	vmenter_skip_apic_write:
 
 	/* Move @vmcb to RAX. */
 	mov %rdi, %_ASM_AX
