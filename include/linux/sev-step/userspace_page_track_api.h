@@ -20,11 +20,28 @@ typedef struct {
 	uint64_t EventSelect; //12 bits in total split in [11:8] and [7:0]
 } perf_ctl_config_t;
 
+typedef enum {
+    VRN_RFLAGS,
+    VRN_RIP,
+    VRN_RSP,
+    VRN_R10,
+    VRN_R11,
+    VRN_R12,
+    VRN_R13,
+    VRN_R8,
+    VRN_R9,
+    VRN_RBX,
+    VRN_RCX,
+    VRN_RDX,
+    VRN_RSI,
+    VRN_CR3,
+    VRN_MAX, //not a register; used to size sev_step_partial_vmcb_save_area_t.register_values
+} vmsa_register_name_t;
+
+
 typedef struct {
-    u64 rflags;
-	u64 rip;
-    u64 rsp;
-	u64 cr3;
+    /// @brief indexed by vmsa_register_name_t
+    uint64_t register_values[VRN_MAX];
 } sev_step_partial_vmcb_save_area_t;
 
 

@@ -3861,6 +3861,8 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 	if(global_sev_step_config.decrypt_vmsa) {
 		struct vmcb_save_area vmcb_sa;
 		struct sev_es_save_area* vmsa;
+		//shorthand
+		uint64_t* reg_val = global_sev_step_config.decrypted_vmsa_data.register_values;
 		vmsa = kmalloc(sizeof(struct sev_es_save_area), GFP_KERNEL);
 		if( sev_step_get_vmcb_save_area(&svm->vcpu,&vmcb_sa,vmsa) ) {
 			printk("sev_step_get_vmcb_save_area failed\n");
@@ -3868,11 +3870,22 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		
 		
 		//TODO: return here once we figured out if we can take a spinlock in isr_wrapper
-		global_sev_step_config.decrypted_vmsa_data.rip = vmcb_sa.rip;
+		reg_val[VRN_RIP] = vmcb_sa.rip;
 		if( vmsa != NULL ) {
-			global_sev_step_config.decrypted_vmsa_data.rflags = vmsa->rflags;
-			global_sev_step_config.decrypted_vmsa_data.rsp = vmsa->rsp;
-			global_sev_step_config.decrypted_vmsa_data.cr3 = vmsa->cr3;
+			reg_val[VRN_RFLAGS] = vmsa->rflags;
+			reg_val[VRN_RIP] = vmsa->rip;
+			reg_val[VRN_RSP] = vmsa->rsp;
+			reg_val[VRN_R10] = vmsa->r10;
+			reg_val[VRN_R11] = vmsa->r11;
+			reg_val[VRN_R12] = vmsa->r12;
+			reg_val[VRN_R13] = vmsa->r13;
+			reg_val[VRN_R8] = vmsa->r8;
+			reg_val[VRN_R9] = vmsa->r9;
+			reg_val[VRN_RBX] = vmsa->rbx;
+			reg_val[VRN_RCX] = vmsa->rcx;
+			reg_val[VRN_RDX] = vmsa->rdx;
+			reg_val[VRN_RSI] = vmsa->rsi;
+			reg_val[VRN_CR3] = vmsa->cr3;
 
 		} else {
 			printk("sev_step_get_vmcb_save_area returned null for vmsa!");
