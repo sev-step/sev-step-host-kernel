@@ -220,9 +220,51 @@ SYM_FUNC_START(__svm_sev_es_vcpu_run)
 	/*if null jump forward to skip chasing*/
 	jz vmenter_probing_done
 	mfence
-	/*prepare chase ptr as first call arg*/
+vmenter_cpu_probe_pointer_chasing_inplace_loop:
 	mov %rsi, %rdi
-	call cpu_probe_pointer_chasing_inplace
+	/* perf reading*/
+	mfence
+	movl $0xc0010203, %ecx
+	rdmsr
+	shl $32, %rdx
+	or %rdx, %rax
+	mov %rax, %r8
+
+
+	lfence
+	movl $1, %ecx
+	rdpru
+	shl $32, %rdx
+	or %rdx, %rax
+	lfence
+	mov %rax, %r10
+
+
+	movq (%rdi), %rsi
+
+
+	lfence
+	movl $1, %ecx
+	rdpru
+	shl $32, %rdx
+	or %rdx, %rax
+	lfence
+
+
+	sub %r10, %rax
+	mov %rax, %r9
+	lfence
+	movl $0xc0010203, %ecx
+	rdmsr
+	shl $32, %rdx
+	or %rdx, %rax
+	sub %r8, %rax
+	mfence
+	movq %r9, (%rdi)
+	movq %rax, 8(%rdi)
+	test %rsi, %rsi
+	jne vmenter_cpu_probe_pointer_chasing_inplace_loop
+
 
 	vmenter_probing_done:
 
