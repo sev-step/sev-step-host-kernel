@@ -5006,9 +5006,9 @@ int cache_attack_testbed_multiple_sets_indiviual_timing_fn(void* void_ctx) {
 	for( victim_cache_set = 0; victim_cache_set < cache_sets; victim_cache_set++ ) {
 		printk("victim cache set: %llu\n",victim_cache_set);
 		
-		cpu_fillEvSetRandomized(&table1_chase,
+		cpu_fillEvSetRandomized(&table1_chase, NULL, 
 			&global_sev_step_config.cache_attack_config->eviction_sets[table1_idx]);
-		cpu_fillEvSetRandomized(&table2_chase,
+		cpu_fillEvSetRandomized(&table2_chase, NULL,
 			&global_sev_step_config.cache_attack_config->eviction_sets[table2_idx]);
 
 		/*{
@@ -5148,10 +5148,10 @@ int cache_attack_testbed_multiple_sets_indiviual_timing_fn(void* void_ctx) {
 
 	//fill chase structures
 
-	cpu_fillEvSet(&table1_chase,
+	cpu_fillEvSet(&table1_chase, NULL,
 		&global_sev_step_config.cache_attack_config->eviction_sets[table1_idx]
 	);
-	cpu_fillEvSet(&table2_chase,
+	cpu_fillEvSet(&table2_chase, NULL,
 		&global_sev_step_config.cache_attack_config->eviction_sets[table2_idx]
 	);
 
@@ -5186,7 +5186,7 @@ int cache_attack_testbed_multiple_sets_indiviual_timing_fn(void* void_ctx) {
 
 			if( (idx % way_count) == 0) {
 
-				cpu_fillEvSet(&cache_set_chases_forward[cache_set_idx],&list_tmp);
+				cpu_fillEvSet(&cache_set_chases_forward[cache_set_idx],NULL, &list_tmp);
 
 				freeAddrListEntries(&list_tmp);
 				initAddrList(&list_tmp);

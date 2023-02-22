@@ -40,14 +40,15 @@ structure in @start
  * @param eviction_set fill the chase structures with the elements form this 
  * eviction set
  */
-void cpu_fillEvSet(void **start, addr_list_t *eviction_set);
+void cpu_fillEvSet(void **start, void **startReverse,
+        addr_list_t *eviction_set);
 /**
  * @brief Like cpu_fillEvSet but with randomized order
  * 
  * @param start 
  * @param eviction_set 
  */
-void cpu_fillEvSetRandomized(void **start, addr_list_t *eviction_set);
+void cpu_fillEvSetRandomized(void **start, void **startReverse, addr_list_t *eviction_set);
 
 
 void initAddrList(addr_list_t *list);

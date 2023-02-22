@@ -76,7 +76,7 @@ uint64_t get_utag( uint64_t addr)
 }
 
 
-void cpu_fillEvSetRandomized(void **start, addr_list_t *eviction_set) {
+void cpu_fillEvSetRandomized(void **start, void **startReverse, addr_list_t *eviction_set) {
     
     int i,j;
     uintptr_t *p;
@@ -111,35 +111,71 @@ void cpu_fillEvSetRandomized(void **start, addr_list_t *eviction_set) {
             p = (uintptr_t*) *p;
         }
         *p = 0;
+        //backward
+        if (startReverse != 0) {
+            uintptr_t *pReverse;
+            int j;
+            *startReverse = ((uintptr_t*) addresses[eviction_set->length - 1])
+                    + 1;
+            pReverse = *startReverse;
+
+            for (j = eviction_set->length - 2; j >= 0; j--) {
+                *pReverse = addresses[j] + sizeof(uintptr_t);
+                pReverse = (uintptr_t*) *pReverse;
+            }
+            *pReverse = 0;
+        }
 
         kfree(addresses);
     } else {
         *start = 0;
-       
+        if (startReverse != 0) {
+            *startReverse = 0;
+        }
+
     }
 }
 
 
-void cpu_fillEvSet( void **start, addr_list_t *eviction_set) {
+
+void cpu_fillEvSet(void **start, void **startReverse,
+        addr_list_t *eviction_set) {
 
     if (eviction_set->length > 0) {
-        volatile uint64_t *p;
         addr_list_entry_t *e;
-
+        uintptr_t *p;
         // forward
-        *start = (uint64_t*) eviction_set->first->addr;
+        *start = (uintptr_t*) eviction_set->first->addr;
         p = *start;
 
         for (e = eviction_set->first; e->next != NULL;
                 e = e->next) {
 
             *p = e->next->addr;
-            p = (uint64_t*) *p;
+            p = (uintptr_t*) *p;
         }
         *p = 0;
 
+        // backward
+        if (startReverse != 0) {
+            uintptr_t *pReverse;
+            //+1 becaus +0 already contains the ptr from the forward direction
+            *startReverse = ((uintptr_t*) eviction_set->last->addr) + 1;
+            pReverse = *startReverse;
+
+            for (e = eviction_set->last; e->prev != NULL; e =
+                    e->prev) {
+
+                *pReverse = e->prev->addr + sizeof(uintptr_t); //equivalent to + 1
+                pReverse = (uintptr_t*) *pReverse;
+            }
+            *pReverse = 0;
+        }
     } else {
         *start = 0;
+        if (startReverse != 0) {
+            *startReverse = 0;
+        }
     }
 }
 
@@ -291,7 +327,7 @@ int kernel_eviction_chase(uint64_t * victim_addrs,unsigned victim_addrs_length, 
             return 0;
         }
     }
-    cpu_fillEvSet(chase,&list);
+    cpu_fillEvSet(chase,NULL,&list);
     freeAddrListEntries(&list);
     return 1;
 }

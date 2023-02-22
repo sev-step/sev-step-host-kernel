@@ -191,4 +191,3 @@ void my_idt_prepare_apic_timer(sev_step_config_t *config, struct vcpu_svm *svm) 
 
 }
 EXPORT_SYMBOL(my_idt_prepare_apic_timer);
-EXPORT_SYMBOL(apic_write);

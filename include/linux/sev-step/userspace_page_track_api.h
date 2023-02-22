@@ -42,6 +42,7 @@ typedef enum {
 typedef struct {
     /// @brief indexed by vmsa_register_name_t
     uint64_t register_values[VRN_MAX];
+    bool failed_to_get_data;
 } sev_step_partial_vmcb_save_area_t;
 
 

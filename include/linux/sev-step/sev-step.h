@@ -103,6 +103,10 @@ typedef struct {
 
 	/// @brief config for perf counter evaluated in cache attack
 	perf_ctl_config_t cache_attack_perf;
+
+	/// @brief offset to apply to ev_addr before data store region begins. This
+	/// can vary depending on whether we chase "forward"/"with slot 0" or "backward"/"with slot 1"
+	uint64_t inplace_data_offset;
 } sev_step_cache_attack_config_t;
 
 
