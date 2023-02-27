@@ -6007,7 +6007,7 @@ static long kvm_dev_ioctl(struct file *filp,
 		}
 		params->eviction_sets = eviction_sets_buf;
 
-		printk("%s:%d KVM_SEV_STEP_BUILD_EVS: Got %llu lut and %llu eviction sets with %llu entries each\n",
+		printk("%s:%d KVM_SET_STEP_IMPORT_USER_EVS: Got %llu lut and %llu eviction sets with %llu entries each\n",
 			__FILE__,__LINE__,params->len,params->eviction_sets->eviction_sets_len,
 			params->way_count);
 		//
@@ -6036,11 +6036,14 @@ static long kvm_dev_ioctl(struct file *filp,
 
 		//Fetch Addrs used during vm state switch and check if they collide with eviction set
 		if( !global_sev_step_config.state_save_values_valid ) {
-			printk("%s:%d KVM_SEV_STEP_BUILD_EVS: omitting cross check with save"
+			printk("%s:%d KVM_SET_STEP_IMPORT_USER_EVS: omitting cross check with save"
 				"area pages as they are not initialized",__FILE__,__LINE__
 			);
 		} else {
-			const int setBits = 14; // 10; // 1024 sets
+			//TODO: we use this to  check if we collide with vmsa or vmcb pages
+			//ideally this should be done in userspace, i.e. provide the user a way
+			// to poll these addrs. However, I do not expect conflicts anyways
+			const int setBits = 24;
     		const int pfnSetBits = setBits - 6; // a page covers 12 bits
     		const uint64_t pfnSetBitsMask = (((1ull << pfnSetBits) - 1) << (6 + 6));
 			addr_list_entry_t* e;
@@ -6059,11 +6062,13 @@ static long kvm_dev_ioctl(struct file *filp,
 					printk("ev_hpa 0x%llx and vmsa_hpa 0x%llx both have set bits 0x%llx\n",
 						ev_hpa, global_sev_step_config.vmsa_hpa,ev_set_bits
 					);
+					return -EINVAL;
 				}
 				if( ev_set_bits == vmcb_set_bits) {
 					printk("ev_hpa 0x%llx and vmcb_hpa 0x%llx both have set bits 0x%llx\n",
 						ev_hpa, global_sev_step_config.vmcb_hpa,ev_set_bits
 					);
+					return -EINVAL;
 				}
 
 				pinned_pages_inner_idx += 1;
