@@ -4914,6 +4914,46 @@ int cache_attack_testbed_aliasing_attack_fn(void* void_ctx) {
 	return 0;
 }
 
+/**
+ * @brief Argument struct for track_all_pages_worker function
+ * 
+ */
+typedef struct {
+	/// @brief lock that protects track_all_job_is_running
+	struct mutex *track_all_state_lock;
+	/// @brief indicates wheter the job is running. Update is job is done
+	bool* track_all_job_is_running;
+	/// @brief pagetrack mode
+	enum kvm_page_track_mode track_mode;
+	/// @brief vcpu to execute the tracking on
+	struct kvm_vcpu *vcpu;
+} track_all_pages_worker_args_t;
+
+/**
+ * @brief Run kvm_start_tracking in background
+ * 
+ * @param void_args 
+ * @return int 
+ */
+int track_all_pages_worker(void* void_args) {
+	long tracked_pages;
+	time64_t start_time;
+	track_all_pages_worker_args_t *args = (track_all_pages_worker_args_t*)void_args;
+
+	printk("track_all_pages_worker: starting\n");
+	start_time = ktime_get_seconds();
+
+	tracked_pages = kvm_start_tracking(args->vcpu, args->track_mode);
+	printk("track_all_pages_worker: tracked %lu pages in %llu seconds\n",
+	tracked_pages, ktime_get_seconds() - start_time);
+
+	mutex_lock(args->track_all_state_lock);
+	(*(args->track_all_job_is_running)) = false;
+	mutex_unlock(args->track_all_state_lock);
+	kfree(args);
+	return 0;
+}
+
 
 int cache_attack_testbed_multiple_sets_indiviual_timing_fn(void* void_ctx) {
 	uint64_t table1_idx, table2_idx;
@@ -5381,9 +5421,26 @@ static long kvm_dev_ioctl(struct file *filp,
 		printk("KVM_UNTRACK_PAGE successfull!\n");
 		r = 0;
 	} break;
+	case KVM_IS_TRACK_ALL_DONE: {
+		is_track_all_done_param_t result;
+
+		mutex_lock(global_sev_step_config.track_all_state_lock);
+		result.is_done = !global_sev_step_config.track_all_job_is_running;
+		mutex_unlock(global_sev_step_config.track_all_state_lock);
+
+		if( copy_to_user(argp, &result, sizeof(is_track_all_done_param_t))) {
+			printk("KVM_IS_TRACK_ALL_DONE: results to userspace\n");
+			mutex_unlock(global_sev_step_config.track_all_state_lock);
+			return -EINVAL;
+		}
+		
+		r = 0;
+	}
+	break;
 	case KVM_TRACK_ALL_PAGES: {
 		track_all_pages_t param;
-		long tracked_pages;
+		struct task_struct *worker_thread = NULL;
+		track_all_pages_worker_args_t* worker_args;
 		printk("KVM_TRACK_ALL_PAGES: got called\n");
 		if (copy_from_user(&param, argp, sizeof(param))) {
 			printk("KVM_TRACK_ALL_PAGES: failed to copy args\n");
@@ -5402,9 +5459,36 @@ static long kvm_dev_ioctl(struct file *filp,
 			return -EFAULT;
 		}
 
-		tracked_pages =
-			kvm_start_tracking(global_sev_step_config.main_vm->vcpus[0], param.track_mode);
-		printk("KVM_TRACK_ALL_PAGES: tracked %lu pages\n",tracked_pages);
+		mutex_lock(global_sev_step_config.track_all_state_lock);
+		if (global_sev_step_config.track_all_job_is_running) {
+			printk("KVM_TRACK_ALL_PAGES: there already is a track all pages job. Use poll api to wait for completion\n");
+			mutex_unlock(global_sev_step_config.track_all_state_lock);
+			return -EFAULT;
+		}
+
+		global_sev_step_config.track_all_job_is_running = true;
+		mutex_unlock(global_sev_step_config.track_all_state_lock);
+
+		worker_args = kmalloc(sizeof(track_all_pages_worker_args_t), GFP_KERNEL);
+
+
+		worker_args->track_all_job_is_running = &global_sev_step_config.track_all_job_is_running;
+		worker_args->track_all_state_lock = global_sev_step_config.track_all_state_lock;
+		worker_args->track_mode = param.track_mode;
+		worker_args->vcpu = global_sev_step_config.main_vm->vcpus[0];
+
+
+		worker_thread = kthread_create(track_all_pages_worker, worker_args,
+			       "track_all_pages_worker");
+		if( worker_thread == NULL ) {
+			printk("KVM_TRACK_ALL_PAGES: kthread_create failed\n");
+			mutex_lock(global_sev_step_config.track_all_state_lock);
+			global_sev_step_config.track_all_job_is_running = false;
+			mutex_unlock(global_sev_step_config.track_all_state_lock);
+			return -EINVAL;
+		}
+
+		wake_up_process(worker_thread);
 
 		r = 0;
 	} break;

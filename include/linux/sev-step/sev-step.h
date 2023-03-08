@@ -163,6 +163,13 @@ typedef struct {
 	uint64_t vmsa_hpa;
 	uint64_t vmcb_hpa;
 	uint64_t vmcb_control_kern_vaddr;
+
+	/// @brief protect track_all_job_is_running
+	struct mutex* track_all_state_lock;
+	/// @brief if ture, a track_all_pages_worker worker is running in the background
+	/// used to prevent two workers from spawpning. Protected by track_all_state_lock
+	bool track_all_job_is_running;
+
 } sev_step_config_t;
 
 /**

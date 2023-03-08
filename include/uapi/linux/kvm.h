@@ -2126,4 +2126,5 @@ struct kvm_stats_desc {
 #define KVM_SEV_STEP_CACHE_ATTACK_TESTBED _IO(KVMIO, 0x20)
 
 #define KVM_SEV_STEP_BUILD_ALIAS_EVS _IOWR(KVMIO, 0x21, build_eviction_set_param_t )
+#define KVM_IS_TRACK_ALL_DONE _IOWR(KVMIO, 0x22, is_track_all_done_param_t)
 #endif /* __LINUX_KVM_H */

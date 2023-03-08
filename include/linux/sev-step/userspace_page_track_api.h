@@ -119,6 +119,15 @@ typedef struct {
 } track_all_pages_t;
 
 /**
+ * @brief arg struct for KVM_IS_TRACK_ALL_DONE
+ */
+typedef struct {
+    /// @brief if true, no background worker is running. If you previously started
+    /// a background job, this indicates that your job is done
+    bool is_done;
+} is_track_all_done_param_t;
+
+/**
  * @brief enum for supported event types
  */
 typedef enum {
