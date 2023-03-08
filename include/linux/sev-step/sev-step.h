@@ -107,6 +107,13 @@ typedef struct {
 	/// @brief offset to apply to ev_addr before data store region begins. This
 	/// can vary depending on whether we chase "forward"/"with slot 0" or "backward"/"with slot 1"
 	uint64_t inplace_data_offset;
+
+
+	/// @brief If true, use value in custom_apic_timer_value for next signle step. This allows us to force zero
+	//steps
+	bool use_custom_apic_timer_value;
+	/// @brief if use_custom_apic_timer_value, we use this value for the apic timer when doing the cache attack
+	uint32_t custom_apic_timer_value;
 } sev_step_cache_attack_config_t;
 
 

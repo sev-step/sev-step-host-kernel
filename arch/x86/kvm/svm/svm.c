@@ -3811,6 +3811,11 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 	if (sev_es_guest(vcpu->kvm)) {
 		mutex_lock(&sev_step_config_mutex);
 		if(sev_step_is_single_stepping_active(&global_sev_step_config)) {
+
+			if( !global_sev_step_config.waitingForTimer ) {
+				apic_timer_value = global_sev_step_config.tmict_value;
+			}
+
 			printk("calculate_steps before: irqs_disabled?: 0x%x",irqs_disabled());
 			calculate_steps(&global_sev_step_config);
 			//always prepare and do chase, otherwise we would need to adjust single stepping timer for cache attack case
@@ -3823,13 +3828,18 @@ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu)
 				if( global_sev_step_config.cache_attack_config != NULL &&
 					global_sev_step_config.cache_attack_config->status == SEV_STEP_CACHE_ATTACK_WANT_PRIME &&
 					global_sev_step_config.cache_attack_config->type != SEV_STEP_EV_TYPE_L1D_KERN_ONLY_ALIASING) {
+
 						global_sev_step_config.cache_attack_config->status = SEV_STEP_CACHE_ATTACK_WANT_PROBE;
+
+						if( global_sev_step_config.cache_attack_config->use_custom_apic_timer_value ) {
+							apic_timer_value = global_sev_step_config.cache_attack_config->custom_apic_timer_value;
+							printk("Using custom apic timer value 0x%u for pending cache attack\n", apic_timer_value);
+
+						}
 				}
 			}
 
-			if( !global_sev_step_config.waitingForTimer ) {
-				apic_timer_value = global_sev_step_config.tmict_value;
-			}
+			
 		}
 		mutex_unlock(&sev_step_config_mutex);
 

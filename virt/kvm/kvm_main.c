@@ -6227,6 +6227,8 @@ static long kvm_dev_ioctl(struct file *filp,
 
 		global_sev_step_config.cache_attack_config->status = SEV_STEP_CACHE_ATTACK_WANT_PRIME;
 		global_sev_step_config.cache_attack_config->victim_lookup_table_idx = param.lookup_table_index;
+		global_sev_step_config.cache_attack_config->use_custom_apic_timer_value = param.apic_timer_value_valid;
+		global_sev_step_config.cache_attack_config->custom_apic_timer_value = param.custom_apic_timer_value;
 
 		mutex_unlock(&sev_step_config_mutex);
 

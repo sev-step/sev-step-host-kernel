@@ -48,6 +48,8 @@ typedef struct {
 
 typedef struct {
     uint64_t lookup_table_index;
+    bool apic_timer_value_valid;
+    uint32_t custom_apic_timer_value;
 } do_cache_attack_param_t;
 
 typedef struct {
