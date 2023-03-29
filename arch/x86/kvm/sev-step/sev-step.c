@@ -337,41 +337,30 @@ long kvm_start_tracking(struct kvm_vcpu *vcpu,enum kvm_page_track_mode mode ) {
         long count = 0;
         u64 iterator, iterat_max;
         struct kvm_memory_slot *slot;
-		struct kvm_memslots* slots;
         int idx;
 
-		slots = vcpu->kvm->memslots[0];
-		slot = id_to_memslot(slots,1);
-        iterat_max = slot->base_gfn + slot->npages;
-		printk("kvm_start_tracking: base_gfn: 0x%llx, npages:%lu, iterat_max: 0x%llx\n",
-			slot->base_gfn,
-			slot->npages,
-			iterat_max
-		);
+
+        iterat_max = vcpu->kvm->memslots[0]->memslots[0].base_gfn 
+		     + vcpu->kvm->memslots[0]->memslots[0].npages;
 		idx = srcu_read_lock(&vcpu->kvm->srcu);
 		write_lock(&vcpu->kvm->mmu_lock);
         for (iterator=0; iterator < iterat_max; iterator++)
         {
-				
-                slot = kvm_vcpu_gfn_to_memslot(vcpu, iterator);
-                if ( slot != NULL  &&
-					!kvm_page_track_is_active(vcpu, iterator,  mode)) {
-			
-                        kvm_slot_page_track_add_page(vcpu->kvm, 
-						     slot, 
-						     iterator, 
-						     mode
-						);
-                        count++;
-                }
-				if( need_resched() || rwlock_needbreak(&vcpu->kvm->mmu_lock))  {
-					cond_resched_rwlock_write(&vcpu->kvm->mmu_lock);
-				}
-               
+			slot = kvm_vcpu_gfn_to_memslot(vcpu, iterator);
+			if ( slot != NULL ) {
+					if( !kvm_page_track_is_active(vcpu, iterator, mode)) {
+						kvm_slot_page_track_add_page_no_flush(vcpu->kvm, slot, iterator, mode);
+					}
+					count++;
+			}
         }
+		
+		if( count > 0 ) {
+			kvm_flush_remote_tlbs(vcpu->kvm);
+		}
 		write_unlock(&vcpu->kvm->mmu_lock);
 		srcu_read_unlock(&vcpu->kvm->srcu, idx);
-        printk("kvm_start_tracking: done\n");
+
         return count;
 }
 EXPORT_SYMBOL(kvm_start_tracking);

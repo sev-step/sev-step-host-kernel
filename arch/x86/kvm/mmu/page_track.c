@@ -105,6 +105,25 @@ void kvm_slot_page_track_add_page(struct kvm *kvm,
 }
 EXPORT_SYMBOL_GPL(kvm_slot_page_track_add_page);
 
+void kvm_slot_page_track_add_page_no_flush(struct kvm *kvm,
+				  struct kvm_memory_slot *slot, gfn_t gfn,
+				  enum kvm_page_track_mode mode) {
+	if (WARN_ON(!page_track_mode_is_valid(mode)))
+		return;
+
+	update_gfn_track(slot, gfn, mode, 1);
+
+	/*
+	 * new track stops large page mapping for the
+	 * tracked page.
+	 */
+	kvm_mmu_gfn_disallow_lpage(slot, gfn);
+
+	kvm_mmu_slot_gfn_protect(kvm, slot, gfn, PG_LEVEL_4K,mode);
+}
+EXPORT_SYMBOL_GPL(kvm_slot_page_track_add_page_no_flush);
+
+
 /*
  * remove the guest page from the tracking pool which stops the interception
  * of corresponding access on that page. It is the opposed operation of

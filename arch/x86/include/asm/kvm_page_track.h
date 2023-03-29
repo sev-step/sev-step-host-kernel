@@ -60,6 +60,17 @@ int kvm_page_track_create_memslot(struct kvm_memory_slot *slot,
 void kvm_slot_page_track_add_page(struct kvm *kvm,
 				  struct kvm_memory_slot *slot, gfn_t gfn,
 				  enum kvm_page_track_mode mode);
+
+/**
+ * @brief Like kvm_slot_page_track_add_page, but user has to explicitly
+ * call kvm_flush_remote_tlbs(kvm) once he is done. If we batch track many
+ * pages, this is much faster
+ * 
+ */
+void kvm_slot_page_track_add_page_no_flush(struct kvm *kvm,
+				  struct kvm_memory_slot *slot, gfn_t gfn,
+				  enum kvm_page_track_mode mode);
+
 void kvm_slot_page_track_remove_page(struct kvm *kvm,
 				     struct kvm_memory_slot *slot, gfn_t gfn,
 				     enum kvm_page_track_mode mode);
